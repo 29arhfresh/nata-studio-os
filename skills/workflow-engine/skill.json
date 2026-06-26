@@ -1,0 +1,11 @@
+{
+  "name": "workflow-engine",
+  "version": "0.1.0",
+  "description": "Event-driven DAG workflow engine with typed context, data routing, scheduling, and step execution.",
+  "author": "Nata Studio OS",
+  "tags": ["workflow", "dag", "orchestration", "scheduler", "core"],
+  "type": "typescript",
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {}
+}
