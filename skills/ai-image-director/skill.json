@@ -1,0 +1,11 @@
+{
+  "name": "ai-image-director",
+  "version": "0.1.0",
+  "description": "AI-native skill for art direction and image prompt engineering across Flux, Midjourney, Ideogram, Imagen, Nano Banana, and Magnific.",
+  "author": "Nata Studio OS",
+  "tags": ["image", "generation", "art-direction", "prompt-engineering", "creative", "visual"],
+  "type": "ai-native",
+  "entrypoint": "SYSTEM_PROMPT.md",
+  "permissions": [],
+  "dependencies": {}
+}

@@ -61,10 +61,21 @@ Nata Studio OS is organized in three layers:
 | **Project Manager** | Project lifecycle engine with tasks, milestones, risks, resource allocation, health scoring, and roadmap generation. |
 | **Prompt Architect** | Production-quality prompt engineering: task decomposition, system prompt architecture, few-shot design, and evaluation harnesses. |
 
+### Skill Types
+
+Nata Studio OS includes two types of Skills:
+
+| Type | Description | Entrypoint |
+|---|---|---|
+| **TypeScript Skill** | Fully implemented module with typed API, tests, and direct invocation | `src/index.ts` |
+| **AI-native Skill** | Executed by an AI model via `SYSTEM_PROMPT.md`, `WORKFLOW.md`, and templates | `SYSTEM_PROMPT.md` |
+
+AI Image Director and Prompt Architect are AI-native Skills. They are complete and production-ready — their execution model is the AI session, not a TypeScript import. Typed TypeScript APIs for both are planned for v1.x.
+
 ### Key Design Principles
 
 - **Skill isolation** — Each Skill is self-contained with its own source, tests, and documentation.
-- **Standard interface** — All Skills expose `skill.json` manifests and typed TypeScript entrypoints.
+- **Standard interface** — All Skills expose `skill.json` manifests. TypeScript Skills add a typed `src/index.ts` entrypoint.
 - **Context sharing** — Memory System enables Skills to share context without direct coupling.
 - **Quality gates** — Agent Orchestrator scores every output before returning it to the caller.
 - **No external dependencies by default** — All `skill.json` manifests declare `"dependencies": {}` unless a runtime dependency is explicitly required.
@@ -94,9 +105,12 @@ The central coordination brain. Accepts a high-level intent, maps it to the righ
 
 ### AI Image Director
 
-**Path:** `skills/ai-image-director/`
+**Path:** `skills/ai-image-director/`  
+**Type:** AI-native
 
 Translates a creative brief into production-ready, model-optimized image prompts. Handles character consistency anchoring, composition and lighting direction, and post-processing guidance (upscale, inpaint, outpaint).
+
+**Invocation:** Load `SYSTEM_PROMPT.md` into an AI session, select a template, and follow `WORKFLOW.md`.
 
 **Supported models:** Flux · Midjourney · Ideogram · Google Imagen · Nano Banana · Magnific
 
@@ -218,9 +232,12 @@ Project lifecycle engine for managing creative production work. Tracks tasks, mi
 
 ### Prompt Architect
 
-**Path:** `skills/prompt-architect/`
+**Path:** `skills/prompt-architect/`  
+**Type:** AI-native
 
 Production-quality prompt engineering discipline for reliable, reproducible AI outputs. Covers system prompt architecture, chain-of-thought scaffolding, few-shot design, structured output enforcement, and evaluation harness design.
+
+**Invocation:** Load `SYSTEM_PROMPT.md` into an AI session, select a template from `templates/`, and follow `WORKFLOW.md`.
 
 **Core principle:** The system prompt is the product. Precision over cleverness. Test before you trust. Version every change.
 
@@ -337,49 +354,53 @@ npm test
 
 ## Quick Start
 
-### Invoke a Skill directly
+### Orchestrate a multi-skill pipeline
 
 ```typescript
-import { orchestrate } from './skills/agent-orchestrator/src/index';
+import orchestrator from './skills/agent-orchestrator/src/index';
 
-const result = await orchestrate({
+const result = orchestrator.orchestrate({
   intent: 'Create a cinematic portrait prompt for a fashion campaign',
-  skills: ['creative-director', 'ai-image-director'],
+  allowedSkills: ['creative-director', 'ai-image-director'],
   policy: 'sequential',
   qualityThreshold: 0.8,
 });
 
-console.log(result.output);
+console.log(result.qualityGate.status); // 'pass'
+console.log(result.finalOutput);
 ```
 
-### Use the AI Image Director standalone
+### Use the AI Image Director (AI-native)
 
-```typescript
-import { buildPrompt } from './skills/ai-image-director/src/index';
+AI Image Director is an AI-native Skill — load its system prompt into your AI session, then select a template:
 
-const prompt = await buildPrompt({
-  brief: 'Editorial portrait, natural light, desert location',
-  model: 'midjourney',
-  template: 'portrait',
-  consistency: { characterId: 'char-001' },
-});
-
-console.log(prompt.optimized);
 ```
+1. Load skills/ai-image-director/SYSTEM_PROMPT.md as the system instruction.
+2. Select a template: skills/ai-image-director/templates/portrait.md
+3. Fill all template fields and run the generation.
+4. Evaluate the output against skills/ai-image-director/CHECKLIST.md.
+```
+
+See `skills/ai-image-director/SKILL.md` for the full usage guide.
 
 ### Build a video sequence
 
 ```typescript
-import { buildSequence } from './skills/ai-video-director/src/index';
+import director from './skills/ai-video-director/src/index';
 
-const sequence = await buildSequence({
-  concept: 'Product launch — luxury watch, 30 seconds',
+const sequence = director.buildSequence({
   model: 'runway',
   format: 'commercial',
-  musicBpm: 120,
+  shots: [
+    { scene: 'Luxury watch on white marble, close-up, macro detail', duration: 6 },
+    { scene: 'Watch worn on wrist, outdoor golden hour, tracking shot', duration: 8 },
+    { scene: 'Brand logo reveal on black background', duration: 4 },
+  ],
+  bpm: 120,
 });
 
 console.log(sequence.shots);
+console.log(sequence.totalDuration); // 18
 ```
 
 ### Store and retrieve knowledge
@@ -411,23 +432,34 @@ nata-studio-os/
 │   ├── agent-orchestrator/           # Core: routing, planning, quality gates
 │   │   ├── SKILL.md                  # API documentation
 │   │   ├── skill.json                # Manifest
-│   │   ├── src/
-│   │   │   └── index.ts              # Entrypoint
-│   │   ├── tests/
-│   │   │   └── *.test.ts             # Test suite
-│   │   ├── SYSTEM_PROMPT.md
-│   │   ├── WORKFLOW.md
-│   │   ├── CHECKLIST.md
-│   │   ├── EXAMPLES.md
-│   │   ├── TOOLS.md
-│   │   └── TROUBLESHOOTING.md
-│   ├── ai-image-director/            # Image prompt direction
+│   │   ├── src/index.ts              # Entrypoint (TypeScript)
+│   │   └── tests/                    # Test suite
+│   ├── ai-image-director/            # AI-native: image prompt direction
+│   │   ├── SKILL.md                  # Usage guide
+│   │   ├── skill.json                # Manifest (type: ai-native)
+│   │   ├── SYSTEM_PROMPT.md          # AI director persona
+│   │   ├── WORKFLOW.md               # Production pipeline
+│   │   ├── CHECKLIST.md              # Quality gates
+│   │   ├── EXAMPLES.md               # Annotated examples
+│   │   └── templates/                # Use-case and model-specific templates
 │   ├── ai-video-director/            # Video prompt direction
+│   │   ├── SKILL.md                  # API documentation
+│   │   ├── skill.json                # Manifest
+│   │   ├── src/index.ts              # Entrypoint (TypeScript)
+│   │   ├── tests/                    # Test suite
+│   │   └── templates/                # Shot and sequence templates
 │   ├── creative-director/            # Brand strategy and visual direction
 │   ├── knowledge-manager/            # Knowledge indexing and retrieval
 │   ├── memory-system/                # Four-tier memory management
 │   ├── project-manager/              # Project lifecycle management
-│   └── prompt-architect/             # Prompt engineering discipline
+│   └── prompt-architect/             # AI-native: prompt engineering discipline
+│       ├── SKILL.md                  # Usage guide
+│       ├── skill.json                # Manifest (type: ai-native)
+│       ├── SYSTEM_PROMPT.md          # Prompt Architect persona
+│       ├── WORKFLOW.md               # Engineering process
+│       ├── CHECKLIST.md              # Pre-deployment gates
+│       ├── EXAMPLES.md               # Annotated production patterns
+│       └── templates/                # Structural prompt templates
 ├── docs/                             # Project-level documentation (planned)
 ├── knowledge/                        # Shared knowledge base (planned)
 ├── projects/                         # Project templates (planned)

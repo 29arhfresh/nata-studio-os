@@ -10,7 +10,11 @@ export type SkillName =
   | 'ai-image-director'
   | 'ai-video-director'
   | 'prompt-architect'
-  | 'agent-orchestrator';
+  | 'agent-orchestrator'
+  | 'creative-director'
+  | 'knowledge-manager'
+  | 'memory-system'
+  | 'project-manager';
 
 export type SkillCapability =
   | 'image-generation'
@@ -23,7 +27,20 @@ export type SkillCapability =
   | 'routing'
   | 'character-consistency'
   | 'style-transfer'
-  | 'text-rendering';
+  | 'text-rendering'
+  | 'brand-strategy'
+  | 'visual-direction'
+  | 'moodboard'
+  | 'creative-scoring'
+  | 'knowledge-indexing'
+  | 'semantic-search'
+  | 'context-assembly'
+  | 'memory-management'
+  | 'context-handoff'
+  | 'project-planning'
+  | 'task-management'
+  | 'roadmap-generation'
+  | 'risk-management';
 
 export type ExecutionPolicy = 'sequential' | 'parallel' | 'conditional' | 'fallback-chain';
 
@@ -183,20 +200,65 @@ const SKILL_REGISTRY: Record<SkillName, SkillDescriptor> = {
     timeoutMs: DEFAULT_TIMEOUT_MS,
     requiresContext: true,
   },
+  'creative-director': {
+    name: 'creative-director',
+    capabilities: ['brand-strategy', 'visual-direction', 'moodboard', 'creative-scoring'],
+    priority: 75,
+    maxConcurrency: 2,
+    timeoutMs: 20_000,
+    requiresContext: true,
+  },
+  'knowledge-manager': {
+    name: 'knowledge-manager',
+    capabilities: ['knowledge-indexing', 'semantic-search', 'context-assembly'],
+    priority: 60,
+    maxConcurrency: 5,
+    timeoutMs: 10_000,
+    requiresContext: false,
+  },
+  'memory-system': {
+    name: 'memory-system',
+    capabilities: ['memory-management', 'context-handoff'],
+    priority: 65,
+    maxConcurrency: 5,
+    timeoutMs: 10_000,
+    requiresContext: false,
+  },
+  'project-manager': {
+    name: 'project-manager',
+    capabilities: ['project-planning', 'task-management', 'roadmap-generation', 'risk-management'],
+    priority: 70,
+    maxConcurrency: 3,
+    timeoutMs: 15_000,
+    requiresContext: false,
+  },
 };
 
 const CAPABILITY_KEYWORDS: Record<SkillCapability, string[]> = {
-  'image-generation': ['image', 'photo', 'picture', 'generate image', 'create image', 'draw', 'illustration'],
-  'image-editing':    ['edit image', 'modify image', 'inpaint', 'outpaint', 'retouch', 'remove background'],
-  'image-upscaling':  ['upscale', 'enhance resolution', 'increase resolution', 'sharpen', 'magnific'],
-  'video-generation': ['video', 'clip', 'animate', 'motion', 'film', 'footage', 'reel'],
-  'video-editing':    ['edit video', 'reframe', 'voice change', 'dub', 'video-to-video'],
+  'image-generation':   ['image', 'photo', 'picture', 'generate image', 'create image', 'draw', 'illustration'],
+  'image-editing':      ['edit image', 'modify image', 'inpaint', 'outpaint', 'retouch', 'remove background'],
+  'image-upscaling':    ['upscale', 'enhance resolution', 'increase resolution', 'sharpen', 'magnific'],
+  'video-generation':   ['video', 'clip', 'animate', 'motion', 'film', 'footage', 'reel'],
+  'video-editing':      ['edit video', 'reframe', 'voice change', 'dub', 'video-to-video'],
   'prompt-engineering': ['prompt', 'write prompt', 'optimize prompt', 'chain of thought', 'few-shot'],
-  'orchestration':    ['orchestrate', 'coordinate', 'pipeline', 'workflow'],
-  'routing':          ['route', 'dispatch', 'choose skill'],
+  'orchestration':      ['orchestrate', 'coordinate', 'pipeline', 'workflow'],
+  'routing':            ['route', 'dispatch', 'choose skill'],
   'character-consistency': ['consistent character', 'same character', 'character across', 'ip-adapter'],
-  'style-transfer':   ['style', 'aesthetic', 'look and feel', 'visual style'],
-  'text-rendering':   ['text in image', 'typography', 'logo', 'lettering', 'ideogram'],
+  'style-transfer':     ['style', 'aesthetic', 'look and feel', 'visual style'],
+  'text-rendering':     ['text in image', 'typography', 'logo', 'lettering', 'ideogram'],
+  'brand-strategy':     ['brand', 'creative brief', 'brand strategy', 'visual identity', 'tone of voice', 'brand guidelines', 'brand direction'],
+  'visual-direction':   ['art direction', 'visual direction', 'color strategy', 'composition direction', 'aesthetic direction'],
+  'moodboard':          ['moodboard', 'mood board', 'visual references', 'visual concept', 'look and feel board'],
+  'creative-scoring':   ['score creative', 'evaluate creative', 'creative review', 'creative quality', 'rate creative', 'quality score'],
+  'knowledge-indexing': ['knowledge', 'index entry', 'store knowledge', 'knowledge base', 'add knowledge', 'document knowledge'],
+  'semantic-search':    ['search knowledge', 'find knowledge', 'retrieve knowledge', 'knowledge search', 'look up'],
+  'context-assembly':   ['assemble context', 'build context', 'gather context', 'context for prompt', 'relevant context'],
+  'memory-management':  ['remember', 'save to memory', 'store in memory', 'memory', 'persist context', 'recall'],
+  'context-handoff':    ['handoff', 'transfer context', 'pass context', 'session handoff', 'continue from'],
+  'project-planning':   ['create project', 'new project', 'plan project', 'project setup', 'project brief'],
+  'task-management':    ['task', 'todo', 'backlog', 'sprint', 'assign task', 'create task', 'milestone'],
+  'roadmap-generation': ['roadmap', 'timeline', 'project schedule', 'delivery plan', 'project roadmap'],
+  'risk-management':    ['risk', 'blocker', 'mitigation', 'dependency risk', 'identify risk'],
 };
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -325,6 +387,30 @@ function buildDependencyGraph(skills: SkillName[]): DependencyGraph {
       from:   'prompt-architect',
       to:     'ai-video-director',
       reason: 'Prompt must be engineered before video generation begins.',
+    });
+  }
+
+  if (skills.includes('knowledge-manager') && skills.includes('creative-director')) {
+    edges.push({
+      from:   'knowledge-manager',
+      to:     'creative-director',
+      reason: 'Knowledge context must be assembled before creative direction begins.',
+    });
+  }
+
+  if (skills.includes('creative-director') && skills.includes('ai-image-director')) {
+    edges.push({
+      from:   'creative-director',
+      to:     'ai-image-director',
+      reason: 'Creative brief and art direction must be set before image generation.',
+    });
+  }
+
+  if (skills.includes('creative-director') && skills.includes('ai-video-director')) {
+    edges.push({
+      from:   'creative-director',
+      to:     'ai-video-director',
+      reason: 'Creative brief and art direction must be set before video generation.',
     });
   }
 

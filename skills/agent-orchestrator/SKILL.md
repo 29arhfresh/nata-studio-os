@@ -96,7 +96,7 @@ const routing = orchestrator.route(
   'Engineer a structured prompt, then generate a cinematic video clip and an image keyframe',
 );
 // routing.primarySkill     → 'ai-video-director'
-// routing.supportingSkills → ['prompt-architect', 'ai-image-director']
+// routing.supportingSkills → ['prompt-architect', 'ai-image-director', 'creative-director']
 
 // Step 2: build the dependency graph
 const graph = orchestrator.buildGraph([
@@ -156,9 +156,11 @@ console.log(session2.qualityGate.status); // 'pass'
 ### [0.1.0] — 2026-06-26
 
 - Initial release of Agent Orchestrator Skill.
-- Intent analysis with keyword-to-capability mapping for all registered Skills.
+- Skill registry with all eight Nata Studio OS Skills: `ai-image-director`, `ai-video-director`, `prompt-architect`, `creative-director`, `knowledge-manager`, `memory-system`, `project-manager`, `agent-orchestrator`.
+- Intent analysis with keyword-to-capability mapping for all registered capabilities.
 - Routing engine with confidence scoring, allowlist, and blocklist support.
 - Dependency graph builder with topological sort (Kahn's algorithm) and cycle detection.
+- Dependency rules: `knowledge-manager → creative-director`, `creative-director → ai-image-director`, `creative-director → ai-video-director`, `prompt-architect → ai-image-director`, `prompt-architect → ai-video-director`, `ai-image-director → ai-video-director`.
 - Execution plan builder supporting `sequential`, `parallel`, `conditional`, and `fallback-chain` policies.
 - Conflict resolution strategies: `priority`, `merge`, `abort`, and `user-prompt`.
 - Quality gate evaluator with per-output scoring, failed-check reporting, and warning thresholds.

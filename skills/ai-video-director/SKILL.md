@@ -7,7 +7,7 @@ AI Video Director is a prompt-engineering and production-planning Skill for gene
 ## Usage
 
 ```typescript
-import director from './src/index.ts';
+import director from './src/index';
 
 const shot = director.buildShot({
   model: 'seedance',
