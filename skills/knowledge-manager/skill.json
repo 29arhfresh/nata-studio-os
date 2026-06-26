@@ -1,0 +1,10 @@
+{
+  "name": "knowledge-manager",
+  "version": "0.1.0",
+  "description": "Central knowledge layer: organizes, indexes, searches, validates, and retrieves structured knowledge across Nata Studio OS.",
+  "author": "Nata Studio OS",
+  "tags": ["knowledge", "search", "indexing", "retrieval", "core", "documentation"],
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {}
+}
