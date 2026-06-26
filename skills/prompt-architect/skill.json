@@ -1,11 +1,11 @@
 {
   "name": "prompt-architect",
-  "version": "0.1.0",
-  "description": "AI-native skill for production-quality prompt engineering: task decomposition, system prompt architecture, evaluation harnesses, and prompt versioning.",
+  "version": "0.2.0",
+  "description": "Production-quality prompt engineering: template selection, prompt assembly, evaluation harnesses, compression, and version control.",
   "author": "Nata Studio OS",
   "tags": ["prompt-engineering", "prompting", "llm", "system-prompt", "evaluation", "engineering"],
-  "type": "ai-native",
-  "entrypoint": "SYSTEM_PROMPT.md",
+  "type": "typescript",
+  "entrypoint": "src/index.ts",
   "permissions": [],
   "dependencies": {}
 }
