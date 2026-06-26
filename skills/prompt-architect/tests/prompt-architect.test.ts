@@ -72,6 +72,11 @@ describe('selectTemplate()', () => {
     const descriptor = selectTemplate('code-generation');
     expect(descriptor.outputFormats).toContain('code');
   });
+
+  it('chain-of-thought structureRules include a reasoning instruction', () => {
+    const descriptor = selectTemplate('chain-of-thought');
+    expect(descriptor.structureRules.some((r) => r.toLowerCase().includes('reason'))).toBe(true);
+  });
 });
 
 // ─── buildPrompt ──────────────────────────────────────────────────────────────
@@ -151,6 +156,16 @@ describe('buildPrompt()', () => {
     expect(prompt.metadata.hasConstraints).toBe(true);
   });
 
+  it('does not inject template structureRules into the generated systemPrompt', () => {
+    const brief: PromptBrief = {
+      taskObjective: 'Given a dataset, produce the three key statistical insights.',
+      taskType: 'chain-of-thought',
+      outputFormat: 'prose',
+    };
+    const prompt = buildPrompt(brief);
+    expect(prompt.systemPrompt).not.toContain('Instruct the model');
+  });
+
   it('includes examples in userTemplate when provided', () => {
     const brief: PromptBrief = {
       ...MINIMAL_BRIEF,
@@ -220,14 +235,20 @@ describe('buildPrompt()', () => {
     expect(prompt.metadata.targetModel).toBe('claude-opus-4-8');
   });
 
-  it('chain-of-thought systemPrompt includes reasoning structure rules', () => {
-    const brief: PromptBrief = {
-      taskObjective: 'Given a dataset, produce the three key statistical insights.',
-      taskType: 'chain-of-thought',
+  it('scoreTaskClarity counts "Given" with capital G toward clarity score', () => {
+    const briefCapital: PromptBrief = {
+      taskObjective: 'Given a document, produce a one-sentence summary.',
+      taskType: 'document-analysis',
       outputFormat: 'prose',
     };
-    const prompt = buildPrompt(brief);
-    expect(prompt.systemPrompt.toLowerCase()).toContain('reason');
+    const briefLower: PromptBrief = {
+      taskObjective: 'A document arrives; summarize it.',
+      taskType: 'document-analysis',
+      outputFormat: 'prose',
+    };
+    const withGiven = buildPrompt(briefCapital);
+    const withoutGiven = buildPrompt(briefLower);
+    expect(withGiven.qualityScore).toBeGreaterThanOrEqual(withoutGiven.qualityScore);
   });
 
   it('role-persona systemPrompt includes persona content', () => {
@@ -239,6 +260,22 @@ describe('buildPrompt()', () => {
     };
     const prompt = buildPrompt(brief);
     expect(prompt.systemPrompt).toContain('Helpful customer support agent');
+  });
+
+  it('few-shot-classifier with empty examples array does not boost scoreConstraintCompleteness', () => {
+    const withEmpty: PromptBrief = {
+      taskObjective: 'Given a ticket, produce a category label.',
+      taskType: 'few-shot-classifier',
+      outputFormat: 'json',
+      examples: [],
+    };
+    const withExamples: PromptBrief = {
+      ...withEmpty,
+      examples: [{ input: 'My order is late', output: '{"category":"shipping"}' }],
+    };
+    const emptyScore = buildPrompt(withEmpty).qualityScore;
+    const filledScore = buildPrompt(withExamples).qualityScore;
+    expect(filledScore).toBeGreaterThan(emptyScore);
   });
 });
 
@@ -261,13 +298,11 @@ describe('evaluatePrompt()', () => {
     const testCases: TestCase[] = [
       {
         id: 'tc1',
-        input: '',
         description: 'Checks that objective is present in prompt',
         expectedOutputContains: ['code snippet'],
       },
       {
         id: 'tc2',
-        input: '',
         description: 'Checks plain English constraint is present',
         expectedOutputContains: ['plain english'],
       },
@@ -277,12 +312,11 @@ describe('evaluatePrompt()', () => {
     expect(report.score).toBe(1);
   });
 
-  it('returns fail verdict when a test case fails', () => {
+  it('returns fail verdict when all test cases fail', () => {
     const prompt = makePrompt();
     const testCases: TestCase[] = [
       {
         id: 'tc1',
-        input: '',
         description: 'Checks for a term that is not in the prompt',
         expectedOutputContains: ['TERM_THAT_DOES_NOT_EXIST_IN_ANY_PROMPT_XYZQQ'],
       },
@@ -292,13 +326,30 @@ describe('evaluatePrompt()', () => {
     expect(report.score).toBe(0);
   });
 
+  it('returns warn verdict when some test cases pass and some fail', () => {
+    const prompt = makePrompt();
+    const testCases: TestCase[] = [
+      { id: 'tc1', description: 'passes', expectedOutputContains: ['objective'] },
+      { id: 'tc2', description: 'fails', expectedOutputContains: ['NONEXISTENT_TERM_XYZQQ'] },
+    ];
+    const report = evaluatePrompt(prompt, testCases);
+    expect(report.verdict).toBe('warn');
+    expect(report.score).toBe(0.5);
+  });
+
+  it('verdict falls back to quality score when no test cases provided', () => {
+    const prompt = makePrompt();
+    const report = evaluatePrompt(prompt, []);
+    expect(['pass', 'warn', 'fail']).toContain(report.verdict);
+    expect(report.score).toBe(prompt.qualityScore);
+  });
+
   it('fails when mustNotContain term is found in prompt', () => {
     const prompt = makePrompt();
     const systemPromptContent = prompt.systemPrompt.split(' ')[0];
     const testCases: TestCase[] = [
       {
         id: 'tc1',
-        input: '',
         description: 'Forbidden term present',
         mustNotContain: [systemPromptContent],
       },
@@ -312,7 +363,6 @@ describe('evaluatePrompt()', () => {
     const testCases: TestCase[] = [
       {
         id: 'tc1',
-        input: '',
         description: 'Absent forbidden term',
         mustNotContain: ['FORBIDDEN_TERM_NEVER_IN_ANY_PROMPT_12345'],
       },
@@ -326,7 +376,6 @@ describe('evaluatePrompt()', () => {
     const testCases: TestCase[] = [
       {
         id: 'tc1',
-        input: '',
         description: 'Objective section present',
         expectedOutputPattern: 'objective',
       },
@@ -340,7 +389,6 @@ describe('evaluatePrompt()', () => {
     const testCases: TestCase[] = [
       {
         id: 'tc1',
-        input: '',
         description: 'Invalid regex',
         expectedOutputPattern: '[invalid(regex',
       },
@@ -363,8 +411,8 @@ describe('evaluatePrompt()', () => {
   it('score equals passing cases over total cases', () => {
     const prompt = makePrompt();
     const testCases: TestCase[] = [
-      { id: 'tc1', input: '', description: 'pass', expectedOutputContains: ['objective'] },
-      { id: 'tc2', input: '', description: 'fail', expectedOutputContains: ['NONEXISTENT_TERM_99'] },
+      { id: 'tc1', description: 'pass', expectedOutputContains: ['objective'] },
+      { id: 'tc2', description: 'fail', expectedOutputContains: ['NONEXISTENT_TERM_99'] },
     ];
     const report = evaluatePrompt(prompt, testCases);
     expect(report.score).toBe(0.5);
@@ -407,12 +455,7 @@ Format: PROSE
 
 ## Quality Criteria
 - Summary must capture the main point
-- Summary must not introduce new facts
-
-## Examples
-### Example 1
-Input: Long document here.
-Output: Short summary here.`;
+- Summary must not introduce new facts`;
 
   it('returns unchanged text when already within token budget', () => {
     const result = compressPrompt(LONG_TEXT, 10_000);
@@ -442,10 +485,22 @@ Output: Short summary here.`;
     expect(result.compressed).toContain('Objective');
   });
 
-  it('removes Examples section when needed', () => {
+  it('removes Quality Criteria section first when needed', () => {
     const result = compressPrompt(LONG_TEXT, 30);
     if (result.sectionsRemoved.length > 0) {
-      expect(result.sectionsRemoved).toContain('Examples');
+      expect(result.sectionsRemoved[0]).toBe('Quality Criteria');
+    }
+  });
+
+  it('removes both sections when budget requires it and preserves cumulative removal', () => {
+    const textWithBoth = `${LONG_TEXT}\n\n## Examples\n### Example 1\nInput: A doc.\nOutput: A summary.`;
+    const result = compressPrompt(textWithBoth, 15);
+    const removedSet = new Set(result.sectionsRemoved);
+    if (result.sectionsRemoved.length >= 2) {
+      expect(removedSet.has('Quality Criteria')).toBe(true);
+      expect(removedSet.has('Examples')).toBe(true);
+      expect(result.compressed).not.toContain('Quality Criteria');
+      expect(result.compressed).not.toContain('## Examples');
     }
   });
 

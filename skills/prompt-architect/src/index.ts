@@ -83,11 +83,10 @@ export interface BuiltPrompt {
 
 export interface TestCase {
   id: string;
-  input: string;
+  description: string;
   expectedOutputPattern?: string;
   expectedOutputContains?: string[];
   mustNotContain?: string[];
-  description: string;
 }
 
 export interface TestCaseResult {
@@ -264,7 +263,7 @@ function estimateTokens(text: string): number {
 
 // ─── System Prompt Assembly ───────────────────────────────────────────────────
 
-function assembleSystemPrompt(brief: PromptBrief, template: TemplateDescriptor): string {
+function assembleSystemPrompt(brief: PromptBrief): string {
   const sections: string[] = [];
 
   if (brief.persona) {
@@ -282,9 +281,9 @@ function assembleSystemPrompt(brief: PromptBrief, template: TemplateDescriptor):
       (brief.outputSchema ? `\n\nSchema:\n${brief.outputSchema}` : '')
   );
 
-  const allConstraints = buildConstraintList(brief, template);
-  if (allConstraints.length > 0) {
-    const constraintText = allConstraints.map((c) => `- ${c}`).join('\n');
+  const userConstraints = brief.constraints ?? [];
+  if (userConstraints.length > 0) {
+    const constraintText = userConstraints.map((c) => `- ${c}`).join('\n');
     sections.push(`## Constraints\n${constraintText}`);
   }
 
@@ -294,15 +293,6 @@ function assembleSystemPrompt(brief: PromptBrief, template: TemplateDescriptor):
   }
 
   return sections.join('\n\n');
-}
-
-function buildConstraintList(brief: PromptBrief, template: TemplateDescriptor): string[] {
-  const constraints: string[] = [];
-  if (brief.constraints) {
-    constraints.push(...brief.constraints);
-  }
-  constraints.push(...template.structureRules);
-  return constraints;
 }
 
 // ─── User Template Assembly ───────────────────────────────────────────────────
@@ -328,45 +318,24 @@ function assembleUserTemplate(brief: PromptBrief): string {
 // ─── Quality Scoring ──────────────────────────────────────────────────────────
 
 interface QualityDimension {
-  name: string;
   score: number;
   weight: number;
 }
 
 function scorePromptQuality(brief: PromptBrief, systemPrompt: string, template: TemplateDescriptor): number {
   const dimensions: QualityDimension[] = [
-    {
-      name: 'task-clarity',
-      score: scoreTaskClarity(brief),
-      weight: 0.30,
-    },
-    {
-      name: 'output-specification',
-      score: scoreOutputSpecification(brief),
-      weight: 0.25,
-    },
-    {
-      name: 'constraint-completeness',
-      score: scoreConstraintCompleteness(brief, template),
-      weight: 0.20,
-    },
-    {
-      name: 'example-coverage',
-      score: scoreExampleCoverage(brief),
-      weight: 0.15,
-    },
-    {
-      name: 'token-efficiency',
-      score: scoreTokenEfficiency(systemPrompt, brief.maxTokens ?? DEFAULT_MAX_TOKENS),
-      weight: 0.10,
-    },
+    { score: scoreTaskClarity(brief), weight: 0.30 },
+    { score: scoreOutputSpecification(brief), weight: 0.25 },
+    { score: scoreConstraintCompleteness(brief, template), weight: 0.20 },
+    { score: scoreExampleCoverage(brief), weight: 0.15 },
+    { score: scoreTokenEfficiency(systemPrompt, brief.maxTokens ?? DEFAULT_MAX_TOKENS), weight: 0.10 },
   ];
 
   return dimensions.reduce((total, d) => total + d.score * d.weight, 0);
 }
 
 function scoreTaskClarity(brief: PromptBrief): number {
-  const objective = brief.taskObjective.trim();
+  const objective = brief.taskObjective.trim().toLowerCase();
   let score = 0.4;
 
   if (objective.length >= 20) score += 0.2;
@@ -378,9 +347,9 @@ function scoreTaskClarity(brief: PromptBrief): number {
 }
 
 function scoreOutputSpecification(brief: PromptBrief): number {
-  let score = 0.3;
+  // outputFormat is always present (required field), so base score reflects that
+  let score = 0.5;
 
-  if (brief.outputFormat) score += 0.2;
   if (brief.outputSchema) score += 0.3;
   if (brief.evaluationCriteria && brief.evaluationCriteria.length > 0) score += 0.2;
 
@@ -391,7 +360,12 @@ function scoreConstraintCompleteness(brief: PromptBrief, template: TemplateDescr
   const requiredCovered = template.requiredFields.filter((f) => {
     const key = f as keyof PromptBrief;
     const value = brief[key];
-    return value !== undefined && value !== null && value !== '';
+    return (
+      value !== undefined &&
+      value !== null &&
+      value !== '' &&
+      !(Array.isArray(value) && value.length === 0)
+    );
   });
 
   const coverage = requiredCovered.length / Math.max(template.requiredFields.length, 1);
@@ -439,7 +413,7 @@ export function buildPrompt(brief: PromptBrief): BuiltPrompt {
   const template = selectTemplate(brief.taskType);
   const maxTokens = brief.maxTokens ?? DEFAULT_MAX_TOKENS;
 
-  let systemPrompt = assembleSystemPrompt(brief, template);
+  let systemPrompt = assembleSystemPrompt(brief);
   const userTemplate = assembleUserTemplate(brief);
 
   const exampleTokens = (brief.examples?.length ?? 0) * TOKENS_PER_EXAMPLE;
@@ -481,11 +455,19 @@ export function evaluatePrompt(prompt: BuiltPrompt, testCases: TestCase[]): Eval
   const recommendations = buildRecommendations(prompt, testCaseResults);
 
   const passCount = testCaseResults.filter((r) => r.passed).length;
-  const score = testCases.length > 0 ? Math.round((passCount / testCases.length) * 100) / 100 : prompt.qualityScore;
+  const score =
+    testCases.length > 0
+      ? Math.round((passCount / testCases.length) * 100) / 100
+      : prompt.qualityScore;
 
-  const hasFailure = testCaseResults.some((r) => r.verdict === 'fail');
-  const hasWarn = testCaseResults.some((r) => r.verdict === 'warn');
-  const verdict: EvaluationVerdict = hasFailure ? 'fail' : hasWarn ? 'warn' : 'pass';
+  const verdict: EvaluationVerdict =
+    testCases.length === 0
+      ? verdictFromScore(prompt.qualityScore)
+      : passCount === testCases.length
+      ? 'pass'
+      : passCount > 0
+      ? 'warn'
+      : 'fail';
 
   return {
     promptId: prompt.id,
@@ -543,12 +525,10 @@ function evaluateTestCase(prompt: BuiltPrompt, tc: TestCase): TestCaseResult {
     findings.push('All checks passed');
   }
 
-  const verdict: EvaluationVerdict = passed ? 'pass' : 'fail';
-
   return {
     testCaseId: tc.id,
     passed,
-    verdict,
+    verdict: passed ? 'pass' : 'fail',
     findings,
   };
 }
@@ -574,7 +554,9 @@ function buildRecommendations(prompt: BuiltPrompt, results: TestCaseResult[]): s
 
   const failedCases = results.filter((r) => !r.passed);
   if (failedCases.length > 0) {
-    recommendations.push(`${failedCases.length} test case(s) failed — review prompt for missing terms or forbidden content`);
+    recommendations.push(
+      `${failedCases.length} test case(s) failed — review prompt for missing terms or forbidden content`
+    );
   }
 
   if (prompt.estimatedTokens > DEFAULT_MAX_TOKENS * 0.9) {
@@ -586,7 +568,11 @@ function buildRecommendations(prompt: BuiltPrompt, results: TestCaseResult[]): s
 
 // ─── compressPrompt ───────────────────────────────────────────────────────────
 
-const SECTION_HEADER_PATTERN = /^#{1,3}\s+.+$/m;
+// Matches only ## level headers used in assembled system prompts.
+// Using ## (not ###) prevents subsections from being split into orphaned entries.
+const SECTION_HEADER_PATTERN = /^##\s+.+$/;
+
+const REMOVABLE_SECTIONS = ['Quality Criteria', 'Examples'];
 
 export function compressPrompt(text: string, maxTokens: number): CompressionResult {
   const originalTokens = estimateTokens(text);
@@ -603,13 +589,11 @@ export function compressPrompt(text: string, maxTokens: number): CompressionResu
     };
   }
 
-  const sections = splitIntoSections(text);
-  const REMOVABLE_SECTIONS = ['Quality Criteria', 'Examples'];
-
   let compressed = text;
   for (const sectionName of REMOVABLE_SECTIONS) {
     if (estimateTokens(compressed) <= maxTokens) break;
-    const withoutSection = removeSectionByName(sections, sectionName);
+    const currentSections = splitIntoSections(compressed);
+    const withoutSection = removeSectionByName(currentSections, sectionName);
     if (withoutSection !== compressed) {
       compressed = withoutSection;
       sectionsRemoved.push(sectionName);
