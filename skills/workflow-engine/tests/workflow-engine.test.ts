@@ -10,6 +10,7 @@ import { DataRouter } from '../src/data-router';
 import type { DataRoute } from '../src/data-router';
 import { resolveDag } from '../src/dag-resolver';
 import type { StepNode } from '../src/dag-resolver';
+import { Scheduler } from '../src/scheduler';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -368,5 +369,106 @@ describe('resolveDag()', () => {
     const result = resolveDag([]);
     expect(result.order).toEqual([]);
     expect(result.hasCycle).toBe(false);
+  });
+});
+
+// ─── 5. Scheduler ─────────────────────────────────────────────────────────────
+
+describe('Scheduler', () => {
+  const linearSteps = [
+    { id: 'a', dependsOn: [] },
+    { id: 'b', dependsOn: ['a'] },
+    { id: 'c', dependsOn: ['b'] },
+  ];
+
+  it('returns only root steps as initially ready', () => {
+    const sched = new Scheduler(linearSteps);
+    expect(sched.getReadySteps()).toEqual(['a']);
+  });
+
+  it('returns the next step after its dependency completes', () => {
+    const sched = new Scheduler(linearSteps);
+    sched.markRunning('a');
+    sched.markCompleted('a');
+    expect(sched.getReadySteps()).toEqual(['b']);
+  });
+
+  it('all parallel root steps are ready at once', () => {
+    const sched = new Scheduler([
+      { id: 'x', dependsOn: [] },
+      { id: 'y', dependsOn: [] },
+    ]);
+    expect(sched.getReadySteps()).toHaveLength(2);
+    expect(sched.getReadySteps()).toContain('x');
+    expect(sched.getReadySteps()).toContain('y');
+  });
+
+  it('a step with two deps is not ready until both complete', () => {
+    const sched = new Scheduler([
+      { id: 'a', dependsOn: [] },
+      { id: 'b', dependsOn: [] },
+      { id: 'c', dependsOn: ['a', 'b'] },
+    ]);
+    sched.markRunning('a');
+    sched.markCompleted('a');
+    expect(sched.getReadySteps()).not.toContain('c');
+    sched.markRunning('b');
+    sched.markCompleted('b');
+    expect(sched.getReadySteps()).toContain('c');
+  });
+
+  it('getStatus returns the current status', () => {
+    const sched = new Scheduler([{ id: 'a', dependsOn: [] }]);
+    expect(sched.getStatus('a')).toBe('pending');
+    sched.markRunning('a');
+    expect(sched.getStatus('a')).toBe('running');
+    sched.markCompleted('a');
+    expect(sched.getStatus('a')).toBe('completed');
+  });
+
+  it('markFailed and markSkipped set the expected status', () => {
+    const sched = new Scheduler([
+      { id: 'a', dependsOn: [] },
+      { id: 'b', dependsOn: [] },
+    ]);
+    sched.markFailed('a');
+    expect(sched.getStatus('a')).toBe('failed');
+    sched.markSkipped('b');
+    expect(sched.getStatus('b')).toBe('skipped');
+  });
+
+  it('isComplete returns false while a step is pending', () => {
+    const sched = new Scheduler(linearSteps);
+    expect(sched.isComplete()).toBe(false);
+  });
+
+  it('isComplete returns true when all steps are terminal', () => {
+    const sched = new Scheduler([{ id: 'a', dependsOn: [] }]);
+    sched.markRunning('a');
+    sched.markCompleted('a');
+    expect(sched.isComplete()).toBe(true);
+  });
+
+  it('hasFailed returns false when no step has failed', () => {
+    const sched = new Scheduler([{ id: 'a', dependsOn: [] }]);
+    expect(sched.hasFailed()).toBe(false);
+  });
+
+  it('hasFailed returns true after a step fails', () => {
+    const sched = new Scheduler([{ id: 'a', dependsOn: [] }]);
+    sched.markFailed('a');
+    expect(sched.hasFailed()).toBe(true);
+  });
+
+  it('throws UNKNOWN_STEP for an unregistered step id', () => {
+    const sched = new Scheduler([]);
+    expect(() => sched.markRunning('ghost')).toThrow('UNKNOWN_STEP');
+    expect(() => sched.getStatus('ghost')).toThrow('UNKNOWN_STEP');
+  });
+
+  it('a running step is not returned by getReadySteps', () => {
+    const sched = new Scheduler([{ id: 'a', dependsOn: [] }]);
+    sched.markRunning('a');
+    expect(sched.getReadySteps()).toHaveLength(0);
   });
 });
