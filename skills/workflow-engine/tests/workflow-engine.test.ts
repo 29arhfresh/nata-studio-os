@@ -8,6 +8,8 @@ import type { WorkflowEvent, WorkflowEventType } from '../src/event-bus';
 import { ContextStore } from '../src/context-store';
 import { DataRouter } from '../src/data-router';
 import type { DataRoute } from '../src/data-router';
+import { resolveDag } from '../src/dag-resolver';
+import type { StepNode } from '../src/dag-resolver';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -282,5 +284,89 @@ describe('DataRouter', () => {
     router.addRoute(route);
     route.outputKey = 'mutated';
     expect(router.getRoutesFrom('step-a')[0].outputKey).toBe('result');
+  });
+});
+
+// ─── 4. DagResolver ───────────────────────────────────────────────────────────
+
+describe('resolveDag()', () => {
+  it('resolves a single step with no dependencies', () => {
+    const result = resolveDag([{ id: 'a', dependsOn: [] }]);
+    expect(result.order).toEqual(['a']);
+    expect(result.hasCycle).toBe(false);
+    expect(result.cycleNodes).toEqual([]);
+  });
+
+  it('resolves a linear chain in dependency order', () => {
+    const steps: StepNode[] = [
+      { id: 'c', dependsOn: ['b'] },
+      { id: 'b', dependsOn: ['a'] },
+      { id: 'a', dependsOn: [] },
+    ];
+    const result = resolveDag(steps);
+    expect(result.order).toEqual(['a', 'b', 'c']);
+    expect(result.hasCycle).toBe(false);
+  });
+
+  it('resolves a diamond DAG correctly', () => {
+    const steps: StepNode[] = [
+      { id: 'start', dependsOn: [] },
+      { id: 'left',  dependsOn: ['start'] },
+      { id: 'right', dependsOn: ['start'] },
+      { id: 'end',   dependsOn: ['left', 'right'] },
+    ];
+    const result = resolveDag(steps);
+    expect(result.order[0]).toBe('start');
+    expect(result.order[result.order.length - 1]).toBe('end');
+    expect(result.order).toContain('left');
+    expect(result.order).toContain('right');
+    expect(result.hasCycle).toBe(false);
+  });
+
+  it('detects a direct cycle', () => {
+    const steps: StepNode[] = [
+      { id: 'a', dependsOn: ['b'] },
+      { id: 'b', dependsOn: ['a'] },
+    ];
+    const result = resolveDag(steps);
+    expect(result.hasCycle).toBe(true);
+    expect(result.cycleNodes).toContain('a');
+    expect(result.cycleNodes).toContain('b');
+  });
+
+  it('detects a three-node cycle', () => {
+    const steps: StepNode[] = [
+      { id: 'x', dependsOn: ['z'] },
+      { id: 'y', dependsOn: ['x'] },
+      { id: 'z', dependsOn: ['y'] },
+    ];
+    const result = resolveDag(steps);
+    expect(result.hasCycle).toBe(true);
+    expect(result.cycleNodes).toHaveLength(3);
+  });
+
+  it('throws UNKNOWN_DEPENDENCY for a missing dependency id', () => {
+    const steps: StepNode[] = [{ id: 'a', dependsOn: ['does-not-exist'] }];
+    expect(() => resolveDag(steps)).toThrow('UNKNOWN_DEPENDENCY');
+  });
+
+  it('resolves parallel independent steps (order contains all ids)', () => {
+    const steps: StepNode[] = [
+      { id: 'x', dependsOn: [] },
+      { id: 'y', dependsOn: [] },
+      { id: 'z', dependsOn: [] },
+    ];
+    const result = resolveDag(steps);
+    expect(result.hasCycle).toBe(false);
+    expect(result.order).toHaveLength(3);
+    expect(result.order).toContain('x');
+    expect(result.order).toContain('y');
+    expect(result.order).toContain('z');
+  });
+
+  it('resolves an empty step list', () => {
+    const result = resolveDag([]);
+    expect(result.order).toEqual([]);
+    expect(result.hasCycle).toBe(false);
   });
 });
