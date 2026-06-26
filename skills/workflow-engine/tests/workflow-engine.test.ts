@@ -6,6 +6,8 @@
 import { EventBus } from '../src/event-bus';
 import type { WorkflowEvent, WorkflowEventType } from '../src/event-bus';
 import { ContextStore } from '../src/context-store';
+import { DataRouter } from '../src/data-router';
+import type { DataRoute } from '../src/data-router';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -187,5 +189,98 @@ describe('ContextStore', () => {
     const obj = { nested: { value: 42 } };
     store.set('wf-1', 'obj', obj);
     expect(store.get('wf-1', 'obj')).toBe(obj);
+  });
+});
+
+// ─── 3. DataRouter ────────────────────────────────────────────────────────────
+
+describe('DataRouter', () => {
+  let router: DataRouter;
+
+  function makeRoute(overrides: Partial<DataRoute> = {}): DataRoute {
+    return {
+      fromStep: 'step-a',
+      toStep:   'step-b',
+      outputKey: 'result',
+      inputKey:  'data',
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    router = new DataRouter();
+  });
+
+  it('resolveInputs returns empty object when no routes registered', () => {
+    expect(router.resolveInputs('step-b', new Map())).toEqual({});
+  });
+
+  it('resolveInputs maps an output key to an input key', () => {
+    router.addRoute(makeRoute());
+    const outputs = new Map([['step-a', { result: 42 }]]);
+    expect(router.resolveInputs('step-b', outputs)).toEqual({ data: 42 });
+  });
+
+  it('resolveInputs ignores routes not targeting the requested step', () => {
+    router.addRoute(makeRoute({ toStep: 'step-c' }));
+    const outputs = new Map([['step-a', { result: 'x' }]]);
+    expect(router.resolveInputs('step-b', outputs)).toEqual({});
+  });
+
+  it('resolveInputs skips a route when the source step has no output', () => {
+    router.addRoute(makeRoute());
+    expect(router.resolveInputs('step-b', new Map())).toEqual({});
+  });
+
+  it('resolveInputs skips a route when outputKey is absent from source output', () => {
+    router.addRoute(makeRoute({ outputKey: 'missing' }));
+    const outputs = new Map([['step-a', { result: 99 }]]);
+    expect(router.resolveInputs('step-b', outputs)).toEqual({});
+  });
+
+  it('resolves multiple routes into one input object', () => {
+    router.addRoute(makeRoute({ outputKey: 'x', inputKey: 'p' }));
+    router.addRoute(makeRoute({ outputKey: 'y', inputKey: 'q' }));
+    const outputs = new Map([['step-a', { x: 1, y: 2 }]]);
+    expect(router.resolveInputs('step-b', outputs)).toEqual({ p: 1, q: 2 });
+  });
+
+  it('routes from different source steps are combined', () => {
+    router.addRoute(makeRoute({ fromStep: 'step-a', outputKey: 'a', inputKey: 'x' }));
+    router.addRoute(makeRoute({ fromStep: 'step-b', toStep: 'step-c', outputKey: 'b', inputKey: 'y' }));
+    const outputs = new Map<string, Record<string, unknown>>([
+      ['step-a', { a: 10 }],
+      ['step-b', { b: 20 }],
+    ]);
+    expect(router.resolveInputs('step-c', outputs)).toEqual({ y: 20 });
+    expect(router.resolveInputs('step-b', outputs)).toEqual({ x: 10 });
+  });
+
+  it('getRoutesTo returns routes targeting a step', () => {
+    router.addRoute(makeRoute());
+    router.addRoute(makeRoute({ fromStep: 'step-c', toStep: 'step-b', outputKey: 'r', inputKey: 'i' }));
+    expect(router.getRoutesTo('step-b')).toHaveLength(2);
+    expect(router.getRoutesTo('step-a')).toHaveLength(0);
+  });
+
+  it('getRoutesFrom returns routes originating from a step', () => {
+    router.addRoute(makeRoute());
+    expect(router.getRoutesFrom('step-a')).toHaveLength(1);
+    expect(router.getRoutesFrom('step-b')).toHaveLength(0);
+  });
+
+  it('removeRoutesFrom removes only routes from that step', () => {
+    router.addRoute(makeRoute({ fromStep: 'step-a' }));
+    router.addRoute(makeRoute({ fromStep: 'step-c', toStep: 'step-b', outputKey: 'r', inputKey: 'i' }));
+    router.removeRoutesFrom('step-a');
+    expect(router.getRoutesFrom('step-a')).toHaveLength(0);
+    expect(router.getRoutesFrom('step-c')).toHaveLength(1);
+  });
+
+  it('addRoute does not share references with the caller', () => {
+    const route = makeRoute();
+    router.addRoute(route);
+    route.outputKey = 'mutated';
+    expect(router.getRoutesFrom('step-a')[0].outputKey).toBe('result');
   });
 });
