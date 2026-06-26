@@ -1,7 +1,7 @@
 # Workflow Engine Architecture — Phase B
 
-**Version:** 1.0.0-draft
-**Status:** Draft — Awaiting Approval
+**Version:** 1.0.0
+**Status:** Approved — Frozen for Implementation
 **Effective Date:** 2026-06-26
 **Extends:** `docs/architecture/workflow-engine-architecture-v2.md` (Phase A)
 **Implemented In:** `skills/workflow-engine/`
@@ -13,19 +13,21 @@
 1. [Overview](#1-overview)
 2. [Component Map](#2-component-map)
 3. [Shared Types](#3-shared-types)
-4. [Component 1 — Asset Manager](#4-component-1--asset-manager)
-5. [Component 2 — Plugin System](#5-component-2--plugin-system)
-6. [Component 3 — Connector Manager](#6-component-3--connector-manager)
-7. [Component 4 — AI Memory](#7-component-4--ai-memory)
-8. [Component 5 — Version Graph](#8-component-5--version-graph)
-9. [Component 6 — Workflow Visualizer](#9-component-6--workflow-visualizer)
-10. [Public API Additions](#10-public-api-additions)
-11. [Execution Flow](#11-execution-flow)
-12. [Error Codes](#12-error-codes)
-13. [Data Flow](#13-data-flow)
-14. [Separation Rules](#14-separation-rules)
-15. [Known Constraints](#15-known-constraints)
-16. [Out of Scope — Phase B](#16-out-of-scope--phase-b)
+4. [Component Lifecycle](#4-component-lifecycle)
+5. [Component 1 — Asset Manager](#5-component-1--asset-manager)
+6. [Component 2 — Plugin System](#6-component-2--plugin-system)
+7. [Component 3 — Connector Manager](#7-component-3--connector-manager)
+8. [Component 4 — AI Memory](#8-component-4--ai-memory)
+9. [Component 5 — Version Graph](#9-component-5--version-graph)
+10. [Component 6 — Workflow Visualizer](#10-component-6--workflow-visualizer)
+11. [Public API Additions](#11-public-api-additions)
+12. [Execution Flow](#12-execution-flow)
+13. [Error Codes](#13-error-codes)
+14. [Data Flow](#14-data-flow)
+15. [Separation Rules](#15-separation-rules)
+16. [Known Constraints](#16-known-constraints)
+17. [Out of Scope — Phase B](#17-out-of-scope--phase-b)
+18. [Testing](#18-testing)
 
 ---
 
@@ -45,6 +47,23 @@ The six new components are:
 | **Workflow Visualizer** | Pure-function graph serializer. Converts a `WorkflowDefinition` — with optional runtime status overlay — into a serializable node-edge graph for UI rendering. |
 
 **Phase B does not change the Phase A execution model.** The sequential step loop, fail-fast semantics, and ContextStore lifecycle are all preserved exactly. Phase B adds pre/post hooks around the loop's internal points without restructuring them.
+
+### Phase A Compatibility Guarantee
+
+Every valid `WorkflowDefinition` (Phase A) that executes correctly under the Phase A engine produces an identical execution result when run through the Phase B engine, provided no Phase B features are used (no plugins, no connectors, no memory writes, no version tracking, no asset emissions).
+
+Specifically:
+
+- The returned `PhaseBWorkflowResult` fields `workflowId`, `status`, `stepResults`, `startedAt`, `completedAt`, and `error` are structurally identical to the Phase A `WorkflowResult` for the same inputs.
+- `PhaseBWorkflowResult.graph` is present (the Visualizer always runs) but has no behavioral effect on execution.
+- `PhaseBWorkflowResult.versionId` is `undefined` when `versionTracking` is absent or `false`.
+- `PhaseBWorkflowResult.memoryWrites` is `undefined` or `[]`.
+- `PhaseBWorkflowResult.assetRefs` is `undefined` or `[]`.
+- All Phase A event types are emitted in the same order and with the same payloads.
+- All Phase A error codes are thrown under the same conditions.
+- All Phase A unit tests pass without modification against the Phase B engine.
+
+The Phase B engine adds `PluginSystem.runBeforeWorkflow` and `runAfterWorkflow` calls around the Phase A loop, but when `definition.plugins` is absent or empty these calls are no-ops — no enabled plugins are activated — and Phase A behavior is preserved exactly.
 
 ---
 
@@ -173,14 +192,17 @@ interface ConnectorConfig {
 }
 
 interface ConnectorHandle {
-  name: string;
-  type: ConnectorType;
+  name:      string;
+  type:      ConnectorType;
   call(method: string, params: Record<string, unknown>): Promise<unknown>;
+  dispose?(): Promise<void> | void;
 }
 
-type ConnectorMap    = Record<string, ConnectorHandle>;
+type ConnectorMap     = Record<string, ConnectorHandle>;
 type ConnectorFactory = (config: ConnectorConfig) => ConnectorHandle;
 ```
+
+`dispose` is optional. Factories that create resources requiring cleanup (persistent HTTP connections, database clients) must implement it. Factories that create stateless handles may omit it. See §7 for the disposal lifecycle.
 
 ### 3.7 AI Memory Types
 
@@ -353,7 +375,49 @@ interface Plugin {
 
 ---
 
-## 4. Component 1 — Asset Manager
+## 4. Component Lifecycle
+
+This section specifies the instantiation model for all Phase B components and distinguishes singleton runtime services from per-run instances.
+
+### 4.1 Singleton Runtime Services
+
+The following five Phase B components are **singleton runtime services**:
+
+| Component | Held On | State Across Runs |
+|---|---|---|
+| `PluginSystem` | `workflowEngine` instance | Plugins installed via `registerPlugin()` persist until uninstalled |
+| `ConnectorManager` | `workflowEngine` instance | Connectors registered via `registerConnector()` persist until unregistered |
+| `AIMemory` | `workflowEngine` instance | Records persist across runs until explicitly deleted or pruned |
+| `AssetManager` | `workflowEngine` instance | Asset records persist across runs until explicitly archived or cleared |
+| `VersionGraph` | `workflowEngine` instance | Version nodes accumulate across runs until explicitly cleared |
+
+Singleton services are shared across all `run()` calls on the same `workflowEngine` instance. They are not created, reset, or destroyed per workflow run.
+
+### 4.2 Per-Run Instances
+
+The following Phase A components are **per-run instances**. They are created fresh inside each `run()` call and go out of scope when `run()` returns:
+
+| Component | Lifetime | Notes |
+|---|---|---|
+| `EventBus` | Duration of one `run()` call | Subscriptions are not retained after return |
+| `ContextStore` | Duration of one `run()` call | Explicitly cleared before `run()` returns |
+| `DataRouter` | Duration of one `run()` call | Routes registered per run only |
+| `StepRunner` | Duration of one `run()` call | No state carried between runs |
+| `Scheduler` | Duration of one `run()` call | No state carried between runs |
+
+The run-scoped `ConnectorMap` — the set of `ConnectorHandle` objects resolved for a specific run — is also a per-run value, even though `ConnectorManager` itself is a singleton. Handles are created at the start of a run and disposed after the run completes (see §7).
+
+### 4.3 Implications
+
+- Installing a plugin or registering a connector before any `run()` call makes it available to all subsequent runs that reference it by name.
+- `AIMemory` records written in one run are immediately readable by subsequent runs via `AIMemory.get` or `AIMemory.retrieve`.
+- `AssetManager` records accumulate across runs. Callers are responsible for archiving or clearing assets that are no longer needed.
+- `VersionGraph` history accumulates across runs. `getHistory(workflowId)` returns all committed versions across all runs.
+- Concurrent `run()` calls on the same `workflowEngine` instance share the singleton services. Callers must not assume that `AIMemory` or `AssetManager` state is isolated between concurrent runs.
+
+---
+
+## 5. Component 1 — Asset Manager
 
 **File:** `src/asset-manager.ts`
 
@@ -391,6 +455,14 @@ class AssetManager {
 - Asset registration is opt-in at the step level. A step's output is passed to `register` only when `PhaseBStepDefinition.emitsAsset` is set.
 - The `value` field stores the raw step output by reference. The Asset Manager does not deep-clone.
 
+### Cross-Run Persistence
+
+`AssetManager` is a singleton runtime service (see §4.1). Asset records are **not cleared automatically** when a `run()` call completes. Records from multiple workflow runs accumulate in the same registry.
+
+Callers retrieve run-specific asset references via `PhaseBWorkflowResult.assetRefs`. Callers needing cross-run queries use `query({ workflowId })` to retrieve all assets ever produced by a given workflow across all runs. Callers are responsible for calling `archive(assetId)` or `clear()` to release records that are no longer needed.
+
+Assets produced by steps that completed before a mid-workflow failure are registered and present in `PhaseBWorkflowResult.assetRefs` even when the overall workflow `status` is `'failed'`.
+
 ### Asset ID Format
 
 ```
@@ -407,7 +479,7 @@ ASSET_NOT_FOUND: Asset "<assetId>" is not registered.
 
 ---
 
-## 5. Component 2 — Plugin System
+## 6. Component 2 — Plugin System
 
 **File:** `src/plugin-system.ts`
 
@@ -459,7 +531,7 @@ PLUGIN_HOOK_ERROR: Plugin "<name>" hook "<hookName>" threw: <message>
 
 ---
 
-## 6. Component 3 — Connector Manager
+## 7. Component 3 — Connector Manager
 
 **File:** `src/connector-manager.ts`
 
@@ -492,6 +564,14 @@ class ConnectorManager {
 - The `ConnectorHandle.call(method, params)` contract is defined by the factory implementation. The Connector Manager does not validate method names or params.
 - Credentials stored in `ConnectorConfig.credentials` are passed to the factory. The Connector Manager does not encrypt or mask them.
 
+### Handle Ownership and Disposal
+
+`ConnectorManager` is a singleton runtime service (see §4.1). It owns factory and config registrations, not live handles. The run-scoped `ConnectorMap` — the set of handles created for a specific `run()` call — is owned by `run()` itself.
+
+After `run()` completes on both the success and failure paths, the Phase B execution loop calls `handle.dispose?.()` on each handle in the run-scoped `ConnectorMap`, awaiting each sequentially. If `dispose()` throws or rejects, the error is swallowed — it does not alter the `PhaseBWorkflowResult` or the returned `status`. Disposal completes before `run()` returns.
+
+`ConnectorManager` is not involved in disposal. It retains factory and config registrations until `unregister` is called; it does not track live handles from any run.
+
 ### Error Formats
 
 ```
@@ -501,7 +581,7 @@ CONNECTOR_NOT_FOUND: Connector "<name>" is not registered.
 
 ---
 
-## 7. Component 4 — AI Memory
+## 8. Component 4 — AI Memory
 
 **File:** `src/ai-memory.ts`
 
@@ -574,7 +654,7 @@ for each spec in stepDef.memoryWrites:
     })
 ```
 
-All writes from a run are collected and returned in `PhaseBWorkflowResult.memoryWrites`.
+Memory writes are flushed after the step is marked `completed` and before `runAfterStep` is called. Memory writes for a step that fails are not committed. Memory writes from steps that completed before a mid-workflow failure are committed and present in `PhaseBWorkflowResult.memoryWrites`. All writes from a run are collected and returned in `PhaseBWorkflowResult.memoryWrites`.
 
 ### Error Format
 
@@ -584,7 +664,7 @@ MEMORY_RECORD_NOT_FOUND: Memory record "<id>" does not exist.
 
 ---
 
-## 8. Component 5 — Version Graph
+## 9. Component 5 — Version Graph
 
 **File:** `src/version-graph.ts`
 
@@ -625,6 +705,16 @@ class VersionGraph {
 - `listWorkflows` returns all `workflowId` values with at least one committed version, in first-commit order.
 - `clear(workflowId)` removes all versions for that workflow. `clear()` (no argument) removes all versions for all workflows.
 
+### Commit Timing
+
+`VersionGraph.commit` is called **before the execution loop begins** (step 9 in the run sequence, after validation and after Phase B services are initialized but before `workflow:started` is emitted).
+
+A `VersionNode` records that a workflow definition was submitted for execution. It does not record run outcomes. **Failed workflow runs remain in version history.** The version graph is a record of definition submissions; run outcomes are captured in `WorkflowResult`, not in `VersionNode`. The `VersionNode` type has no `status` or `runResult` field.
+
+This separation is intentional: a definition may fail due to a runtime condition (unavailable connector, handler exception, plugin hook failure) that is unrelated to the definition itself. Version history must not conflate structural versioning with execution observability.
+
+Callers who need to correlate a version with its run outcome can use `result.versionId` alongside `result.status`.
+
 ### Version ID Format
 
 ```
@@ -641,7 +731,7 @@ VERSION_NOT_FOUND: Version "<versionId>" does not exist.
 
 ---
 
-## 9. Component 6 — Workflow Visualizer
+## 10. Component 6 — Workflow Visualizer
 
 **File:** `src/workflow-visualizer.ts`
 
@@ -691,7 +781,7 @@ Node positions:
 
 ---
 
-## 10. Public API Additions
+## 11. Public API Additions
 
 **File:** `src/index.ts`
 
@@ -750,10 +840,11 @@ Extends the Phase A execution sequence with Phase B steps at well-defined insert
 8. Calls `resolveDag`. Instantiates `Scheduler` with all steps.
 9. `[B]` If `definition.versionTracking === true`, calls `VersionGraph.commit(definition)` and records `versionId`.
 10. Emits `workflow:started`.
-11. Enters the Phase B execution loop (see §11).
+11. Enters the Phase B execution loop (see §12).
 12. `[B]` Calls `PluginSystem.runAfterWorkflow({ workflowId })`.
 13. `[B]` Calls `visualize(definition, result)` and attaches the returned `VisualizerGraph` to `result.graph`.
-14. Emits `workflow:completed` or `workflow:failed`, clears the `ContextStore`, and returns `PhaseBWorkflowResult`.
+14. `[B]` Calls `handle.dispose?.()` on each handle in the run-scoped `ConnectorMap`, awaiting each sequentially. Disposal errors are swallowed.
+15. Emits `workflow:completed` or `workflow:failed`, clears the `ContextStore`, and returns `PhaseBWorkflowResult`.
 
 ### Named Exports — Phase B Additions
 
@@ -781,7 +872,7 @@ export type {
 
 ---
 
-## 11. Execution Flow
+## 12. Execution Flow
 
 ### Phase B Augmented Loop
 
@@ -860,6 +951,7 @@ run(definition: PhaseBWorkflowDefinition, options?):
         [B] PluginSystem.runAfterWorkflow({ workflowId })
         [B] partialResult = { workflowId, status: 'failed', ... }
         [B] graph = visualize(definition, partialResult)
+        [B] for each handle in connectorMap: await handle.dispose?.()  ← errors swallowed
 
         return PhaseBWorkflowResult {
           status: 'failed', graph, versionId,
@@ -873,6 +965,7 @@ run(definition: PhaseBWorkflowDefinition, options?):
 
   [B] PluginSystem.runAfterWorkflow({ workflowId })
   [B] graph = visualize(definition, finalResult)
+  [B] for each handle in connectorMap: await handle.dispose?.()  ← errors swallowed
 
   return PhaseBWorkflowResult {
     status, graph, versionId,
@@ -888,7 +981,7 @@ The full `connectorMap` is resolved once at the start of the run. Each step rece
 
 ### Plugin Hook Failure
 
-If any plugin hook throws, the `run*` call rejects with `PLUGIN_HOOK_ERROR`. The execution loop treats this as a fatal error and returns `PhaseBWorkflowResult` with `status: 'failed'`. No further steps or hooks are invoked. `runAfterWorkflow` and `visualize` are not called on hook failure; `graph` is absent from the returned result.
+If any plugin hook throws, the `run*` call rejects with `PLUGIN_HOOK_ERROR`. The execution loop treats this as a fatal error and returns `PhaseBWorkflowResult` with `status: 'failed'`. No further steps or hooks are invoked. `runAfterWorkflow` and `visualize` are not called on hook failure; `graph` is absent from the returned result. Connector disposal is also skipped on plugin hook failure.
 
 ### Memory Write Ordering
 
@@ -898,9 +991,13 @@ Memory writes for a step are flushed after the step is marked `completed` and be
 
 `visualize` is called on both the success and failure paths. On the failure path, the result passed to `visualize` contains only step results for steps that ran before the failure. Steps that never ran are treated as `'pending'` by the Visualizer.
 
+### Connector Disposal Ordering
+
+Connector disposal runs after `runAfterWorkflow` and after `visualize`, on both success and failure paths. It runs before `run()` returns. If `dispose()` throws, the error is swallowed and disposal continues to the next handle.
+
 ---
 
-## 12. Error Codes
+## 13. Error Codes
 
 Phase B appends the following codes to Phase A's error table. Phase A codes are reproduced for completeness.
 
@@ -921,7 +1018,7 @@ Phase B appends the following codes to Phase A's error table. Phase A codes are 
 
 ---
 
-## 13. Data Flow
+## 14. Data Flow
 
 ```
 Caller supplies:
@@ -966,6 +1063,7 @@ Caller supplies:
               │                                                     │
               │ PluginSystem.runAfterWorkflow()                     │
               │ visualize(definition, result)  → graph              │
+              │ connectorMap handles: dispose?.()                   │
               │ ContextStore.clear(workflowId)                      │
               └─────────────────────────────────────────────────────┘
                                     │
@@ -979,7 +1077,7 @@ Caller supplies:
 
 ---
 
-## 14. Separation Rules
+## 15. Separation Rules
 
 These rules govern what each Phase B component may import and access. Violations indicate an architecture defect.
 
@@ -998,6 +1096,10 @@ These rules govern what each Phase B component may import and access. Violations
 ### Phase A Immutability
 
 No Phase A source file (`event-bus.ts`, `context-store.ts`, `data-router.ts`, `dag-resolver.ts`, `scheduler.ts`, `step-runner.ts`, `types.ts`) is modified in Phase B. All Phase A component interfaces are unchanged and all Phase A tests continue to pass without modification.
+
+### Phase A Compatibility Guarantee
+
+Every valid `WorkflowDefinition` accepted by the Phase A engine is accepted by the Phase B engine with identical execution semantics when no Phase B features are used. The Phase B `run()` function with a plain `WorkflowDefinition` input is a strict behavioral superset of the Phase A `run()` function: same events, same error codes, same step execution order, same `ContextStore` lifecycle. See §1 for the complete compatibility specification.
 
 ### StepInput Extension Rule
 
@@ -1029,11 +1131,11 @@ Plugin hooks run only for plugins explicitly listed in `PhaseBWorkflowDefinition
 
 ---
 
-## 15. Known Constraints
+## 16. Known Constraints
 
 | Constraint | Detail |
 |---|---|
-| **In-process state only** | All Phase B components store state in-process. `AssetManager`, `AIMemory`, `VersionGraph`, and `PluginSystem` are in-memory only. State is lost on process restart. |
+| **In-process state only** | All Phase B singleton services store state in-process. `AssetManager`, `AIMemory`, `VersionGraph`, and `PluginSystem` are in-memory only. State is lost on process restart. |
 | **Sequential plugin hooks** | Plugin hooks are awaited sequentially in installation order. Multiple plugins do not parallelize their hook execution. |
 | **No hook cancellation** | Plugin hooks cannot cancel a step, modify step inputs, or skip execution. They are observers only. |
 | **No connector pooling** | Connector handles are created fresh per `ConnectorManager.resolve` call. Connection pooling must be implemented inside the `ConnectorFactory`. |
@@ -1042,12 +1144,15 @@ Plugin hooks run only for plugins explicitly listed in `PhaseBWorkflowDefinition
 | **Visualizer layout is topological only** | Node positions are column (depth) and row (insertion order within column). No force-directed or Sugiyama layout is applied. |
 | **Sequential execution inherited** | Phase B does not introduce parallel step execution. The Phase A sequential loop is preserved. |
 | **Cyclic DAG in Visualizer** | If `visualize` is called on a definition with a cycle, cyclic nodes are placed in the last column on a best-effort basis. No error is thrown. |
-| **Hook failure skips afterWorkflow and visualize** | If a plugin hook throws `PLUGIN_HOOK_ERROR`, `runAfterWorkflow` and `visualize` are not called. The returned result has no `graph` field. |
+| **Hook failure skips afterWorkflow, visualize, and disposal** | If a plugin hook throws `PLUGIN_HOOK_ERROR`, `runAfterWorkflow`, `visualize`, and connector disposal are not called. The returned result has no `graph` field and connectors are not disposed. |
+| **Assets not cleared on run completion** | `AssetManager` does not clear records after a run. Callers must manage asset lifecycle explicitly. |
+| **Failed runs committed to version history** | `VersionGraph` records definition submissions, not run outcomes. Runs that fail at runtime are committed to history. |
+| **Disposal skipped on hook failure** | If a plugin hook fails mid-run, the run-scoped `ConnectorMap` handles are not disposed. Factories that create resources requiring cleanup must account for this failure mode. |
 | **`cancelled` status unused** | `WorkflowStatus` includes `'cancelled'` (inherited from Phase A). No Phase B code path sets this value. |
 
 ---
 
-## 16. Out of Scope — Phase B
+## 17. Out of Scope — Phase B
 
 The following systems are explicitly excluded from this architecture version and must not be added until a subsequent phase is specified:
 
@@ -1068,3 +1173,218 @@ The following systems are explicitly excluded from this architecture version and
 - PluginSystem version conflict resolution
 - AIMemory replication or cross-process sharing
 - `memoryContext` persistence beyond the current run's ContextStore seeding
+- Connector disposal on plugin hook failure
+
+---
+
+## 18. Testing
+
+This section specifies the required test coverage for Phase B. All Phase A tests remain required and must pass without modification against the Phase B engine.
+
+### Unit Tests
+
+#### AssetManager — `tests/asset-manager.test.ts`
+
+- `register` generates a unique `assetId` with prefix `asset-`
+- `register` sets `registeredAt` to a recent timestamp
+- `register` returns the complete `AssetRecord` including `value`
+- `get` returns the correct record for a known `assetId`
+- `get` returns `undefined` for an unknown `assetId`
+- `query` with no filters returns all non-archived records
+- `query` with `type` filter returns only matching records
+- `query` with `tags` filter uses intersection matching
+- `query` with `workflowId` filter returns only matching records
+- `query` with multiple filters ANDs all conditions
+- `tag` appends new tags to an existing record
+- `tag` ignores duplicate tags silently
+- `tag` throws `ASSET_NOT_FOUND` for an unknown `assetId`
+- `archive` removes the record from `getAll` results
+- `archive` causes `get` to return `undefined` for that `assetId`
+- `archive` throws `ASSET_NOT_FOUND` for an unknown `assetId`
+- `getAll` returns records in registration order
+- `getAll` excludes archived records
+- `clear` removes all records including archived ones
+- `register` after `clear` starts fresh with no prior records
+
+#### PluginSystem — `tests/plugin-system.test.ts`
+
+- `install` registers a plugin and enables it by default
+- `install` throws `PLUGIN_ALREADY_INSTALLED` for a duplicate `manifest.name`
+- `uninstall` removes the plugin
+- `uninstall` throws `PLUGIN_NOT_FOUND` for an unknown name
+- `disable` prevents hooks from running without removing the plugin
+- `enable` restores hook execution for a disabled plugin
+- `enable` and `disable` throw `PLUGIN_NOT_FOUND` for an unknown name
+- `isEnabled` returns `true` after install, `false` after disable, `true` after re-enable
+- `getManifest` returns the manifest for an installed plugin
+- `getManifest` returns `undefined` for an unknown name
+- `listPlugins` returns manifests of all installed plugins in installation order
+- `runBeforeStep` calls each enabled plugin's `beforeStep` hook in installation order
+- `runBeforeStep` skips plugins with no `beforeStep` hook
+- `runBeforeStep` skips disabled plugins
+- `runAfterStep` calls each enabled plugin's `afterStep` hook
+- `runBeforeWorkflow` calls each enabled plugin's `beforeWorkflow` hook
+- `runAfterWorkflow` calls each enabled plugin's `afterWorkflow` hook
+- A hook that throws causes the `run*` call to reject with `PLUGIN_HOOK_ERROR`
+- `run*` resolves immediately when no plugins are installed
+- `run*` resolves immediately when all installed plugins lack the relevant hook
+
+#### ConnectorManager — `tests/connector-manager.test.ts`
+
+- `register` stores config and factory under `config.name`
+- `register` throws `CONNECTOR_ALREADY_REGISTERED` for a duplicate name
+- `unregister` removes the registration
+- `unregister` throws `CONNECTOR_NOT_FOUND` for an unknown name
+- `has` returns `true` for a registered name
+- `has` returns `false` for an unknown name
+- `getConfig` returns the stored config for a registered name
+- `getConfig` returns `undefined` for an unknown name
+- `resolve([])` returns `{}`
+- `resolve(names)` calls the factory with the stored config for each name
+- `resolve(names)` returns a `ConnectorMap` keyed by connector name
+- `resolve(names)` invokes the factory on each call; handles are not cached
+- `resolve(names)` throws `CONNECTOR_NOT_FOUND` for any unknown name
+- `listNames` returns all registered names
+
+#### AIMemory — `tests/ai-memory.test.ts`
+
+- `store` generates a unique `id` with prefix `mem-`
+- `store` sets `createdAt` to a recent timestamp
+- `store` returns the completed record including `id` and `createdAt`
+- `retrieve` with no query returns all records
+- `retrieve` with `key` filter returns only matching records
+- `retrieve` with `tier` filter returns only matching records
+- `retrieve` with `tags` filter uses intersection matching
+- `retrieve` with `scope` filter returns only records with that scope
+- `retrieve` with `limit` caps the result count
+- `retrieve` returns records in `createdAt` ascending order
+- `get(key)` returns the most recently created record for that key
+- `get(key, scope)` returns the most recently created record for that key and scope
+- `get` returns `undefined` for an unknown key
+- `delete` removes the record by `id`
+- `delete` throws `MEMORY_RECORD_NOT_FOUND` for an unknown `id`
+- `prune` removes records whose `ttlMs` has elapsed
+- `prune` does not remove records without `ttlMs`
+- `prune` returns the count of removed records
+- `reader(scope)` returns a `MemoryReader` scoped to that scope
+- `MemoryReader.retrieve` delegates to `AIMemory.retrieve` with the pre-bound scope
+- `MemoryReader.get` delegates to `AIMemory.get` with the pre-bound scope
+- `MemoryReader` exposes no `store`, `delete`, `prune`, `clear`, or `clearAll` methods
+- `clear(scope)` removes all records with that scope
+- `clear(undefined)` removes all records with no scope set
+- `clearAll` removes all records regardless of scope
+
+#### VersionGraph — `tests/version-graph.test.ts`
+
+- `commit` generates a unique `versionId` with prefix `ver-`
+- `commit` sets `committedAt` to a recent timestamp
+- `commit` snapshot excludes step `handler` fields
+- `commit` snapshot includes all other step and workflow fields
+- First commit for a `workflowId` has no `parentVersionId`
+- Second commit sets `parentVersionId` to the first commit's `versionId`
+- `commit` accepts `label` and `tags` options and stores them on the node
+- `getVersion` returns the correct node for a known `versionId`
+- `getVersion` returns `undefined` for an unknown `versionId`
+- `getHistory` returns nodes in commit order (oldest first)
+- `getHistory` returns `[]` for an unknown `workflowId`
+- `getLatest` returns the most recently committed node for a `workflowId`
+- `getLatest` returns `undefined` for an unknown `workflowId`
+- `tag` sets the `label` field on an existing node
+- `tag` throws `VERSION_NOT_FOUND` for an unknown `versionId`
+- `diff` returns correct `stepsAdded`, `stepsRemoved`, `stepsChanged`
+- `diff` returns correct `routesAdded`, `routesRemoved`
+- `diff` throws `VERSION_NOT_FOUND` if either id is unknown
+- `diff` can compare versions from different `workflowId` values
+- `listWorkflows` returns `workflowId` values in first-commit order
+- `clear(workflowId)` removes all versions for that workflow
+- `clear()` removes all versions
+
+#### WorkflowVisualizer — `tests/workflow-visualizer.test.ts`
+
+- Linear DAG: nodes have correct column and row values
+- Diamond DAG (`A→B→D`, `A→C→D`): B and C share column 1, rows 0 and 1 respectively
+- Parallel DAG: independent root steps are all in column 0
+- Single-step workflow: one node at column 0, row 0
+- One `VisualizerEdge` produced for each unique `(from, to)` dependency pair
+- `routeKeys` contains `outputKey` values from matching `DataRoute` entries
+- `routeKeys` is `[]` for edges with no matching `DataRoute`
+- Status overlay: node status matches `StepResult.status` when result is provided
+- Status overlay: steps with no `StepResult` (unreached) receive `status: 'pending'`
+- No result provided: all node statuses are `'unknown'`
+- No result provided: `graph.status` is `'unknown'`
+- Result provided: `graph.status` matches `result.status`
+- Cyclic DAG: function does not throw; cyclic nodes placed in last column
+- `graph.workflowId` matches `definition.id`
+
+---
+
+### Integration Tests
+
+#### Phase A Compatibility — `tests/phase-a-compatibility.test.ts`
+
+- A Phase A `WorkflowDefinition` run through the Phase B `run()` produces a `PhaseBWorkflowResult` whose `workflowId`, `status`, `stepResults`, `startedAt`, `completedAt`, and `error` fields are structurally identical to a Phase A `WorkflowResult` for the same inputs
+- All Phase A event types (`workflow:started`, `workflow:completed`, `workflow:failed`, `step:started`, `step:completed`, `step:failed`) are emitted in the same order with the same payloads
+- All Phase A error codes (`INVALID_WORKFLOW`, `UNKNOWN_DEPENDENCY`, `STEP_TIMEOUT`, `UNKNOWN_STEP`) are thrown under the same conditions
+- A Phase A workflow with `routes` and `context` options produces the same data routing and context behavior
+
+#### Plugin Lifecycle Integration — `tests/plugin-integration.test.ts`
+
+- `beforeWorkflow` and `afterWorkflow` hooks called exactly once per run
+- `beforeStep` called once per step before the handler executes
+- `afterStep` called once per step after the handler returns (both `completed` and `failed`)
+- Hooks are called in installation order across multiple installed plugins
+- A plugin listed in `definition.plugins` that is not installed fails `validate()`
+- A `beforeStep` hook that throws fails the workflow and prevents further steps
+- `afterWorkflow` is not called when a plugin hook throws
+- `visualize` is not called when a plugin hook throws; `graph` is absent from the result
+- Connector disposal is not called when a plugin hook throws
+- Plugins not listed in `definition.plugins` are not invoked even if installed and enabled
+
+#### Connector Integration — `tests/connector-integration.test.ts`
+
+- A step with `requiredConnectors` receives matching handles in `input.connectors`
+- A step with `requiredConnectors: []` or no `requiredConnectors` receives `input.connectors: {}`
+- `handle.dispose?.()` is awaited on all run-scoped handles after the run completes (success path)
+- `handle.dispose?.()` is awaited on all run-scoped handles after the run completes (step failure path)
+- A `dispose()` that throws does not alter the returned `PhaseBWorkflowResult`
+- A connector name in `requiredConnectors` that is not registered fails `validate()`
+
+#### AIMemory Integration — `tests/ai-memory-integration.test.ts`
+
+- `memoryWrites` from a step are committed before `afterStep` hook fires
+- Committed memory writes appear in `PhaseBWorkflowResult.memoryWrites`
+- A `MemoryReader` in step input can read records written by a prior run on the same `workflowEngine` instance
+- `memoryContext` keys are accessible via `input.context` (seeded into `ContextStore`)
+- Memory writes for a step that fails are not committed
+- Memory writes from steps that completed before a mid-workflow failure are committed and present in `PhaseBWorkflowResult.memoryWrites`
+
+#### AssetManager Integration — `tests/asset-manager-integration.test.ts`
+
+- A step with `emitsAsset` registers an `AssetRecord` after the step completes
+- The registered asset appears in `PhaseBWorkflowResult.assetRefs`
+- Assets from steps that completed before a mid-workflow failure are registered and present in `assetRefs`
+- A step with no `emitsAsset` does not register any asset
+- Assets persist in `AssetManager` after the run completes (not cleared automatically)
+- `AssetManager.query({ workflowId })` returns assets from multiple runs of the same workflow
+
+#### VersionGraph Integration — `tests/version-graph-integration.test.ts`
+
+- `versionTracking: true` commits the definition before execution and sets `versionId` in the result
+- The committed `VersionNode` is retrievable via `workflowEngine.getVersion(result.versionId)`
+- A failed workflow run has a committed `VersionNode` in version history
+- `versionTracking: false` or absent: no commit occurs and `result.versionId` is `undefined`
+- Multiple runs of the same `workflowId` produce a linked version chain via `parentVersionId`
+
+#### Visualizer Integration — `tests/visualizer-integration.test.ts`
+
+- `result.graph` is present on the success path
+- `result.graph` is present on the step failure path, with the failed step marked `'failed'` and unreached steps marked `'pending'`
+- `result.graph` is absent when a plugin hook throws `PLUGIN_HOOK_ERROR`
+- `result.graph.status` matches `result.status`
+
+#### Full Pipeline Integration — `tests/full-pipeline-integration.test.ts`
+
+- A run with all Phase B features enabled (plugins, connectors, memory writes, version tracking, asset emission) completes without error
+- Within a single step the execution order is: `beforeStep` → handler → asset register → memory write → `afterStep`
+- Across the full run the execution order is: `beforeWorkflow` → (per-step loop) → `afterWorkflow` → `visualize` → connector disposal
+- A run that fails on step 2 of 3: steps completed before failure have their assets and memory writes captured; step 3 never runs; `afterStep` is called for the failing step; `afterWorkflow` is called; `visualize` is called with partial results; connector disposal runs
