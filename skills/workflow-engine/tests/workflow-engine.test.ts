@@ -11,6 +11,8 @@ import type { DataRoute } from '../src/data-router';
 import { resolveDag } from '../src/dag-resolver';
 import type { StepNode } from '../src/dag-resolver';
 import { Scheduler } from '../src/scheduler';
+import { StepRunner } from '../src/step-runner';
+import type { StepInput, StepHandler } from '../src/step-runner';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -470,5 +472,100 @@ describe('Scheduler', () => {
     const sched = new Scheduler([{ id: 'a', dependsOn: [] }]);
     sched.markRunning('a');
     expect(sched.getReadySteps()).toHaveLength(0);
+  });
+});
+
+// ─── 6. StepRunner ────────────────────────────────────────────────────────────
+
+describe('StepRunner', () => {
+  const runner = new StepRunner();
+
+  function makeInput(overrides: Partial<StepInput> = {}): StepInput {
+    return {
+      stepId: 'step-1',
+      workflowId: 'wf-1',
+      context: {},
+      data: {},
+      ...overrides,
+    };
+  }
+
+  it('runs a synchronous handler and returns completed status', async () => {
+    const result = await runner.run('step-1', () => 42, makeInput());
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe(42);
+    expect(result.error).toBeNull();
+    expect(result.attempt).toBe(1);
+  });
+
+  it('runs an async handler and returns completed status', async () => {
+    const handler: StepHandler = async () => ({ value: 'hello' });
+    const result = await runner.run('step-1', handler, makeInput());
+    expect(result.status).toBe('completed');
+    expect(result.output).toEqual({ value: 'hello' });
+  });
+
+  it('returns failed status when handler throws', async () => {
+    const handler: StepHandler = () => { throw new Error('boom'); };
+    const result = await runner.run('step-1', handler, makeInput());
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('boom');
+    expect(result.output).toBeNull();
+  });
+
+  it('returns failed status when async handler rejects', async () => {
+    const handler: StepHandler = async () => { throw new Error('async-fail'); };
+    const result = await runner.run('step-1', handler, makeInput());
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('async-fail');
+  });
+
+  it('retries the handler up to maxRetries times', async () => {
+    let calls = 0;
+    const handler: StepHandler = () => {
+      calls++;
+      if (calls < 3) throw new Error('not yet');
+      return 'done';
+    };
+    const result = await runner.run('step-1', handler, makeInput(), { maxRetries: 2 });
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe('done');
+    expect(result.attempt).toBe(3);
+    expect(calls).toBe(3);
+  });
+
+  it('fails after exhausting retries', async () => {
+    let calls = 0;
+    const handler: StepHandler = () => { calls++; throw new Error('always-fails'); };
+    const result = await runner.run('step-1', handler, makeInput(), { maxRetries: 2 });
+    expect(result.status).toBe('failed');
+    expect(result.attempt).toBe(3);
+    expect(calls).toBe(3);
+  });
+
+  it('times out and returns failed with STEP_TIMEOUT error', async () => {
+    const handler: StepHandler = () => new Promise((res) => setTimeout(res, 500));
+    const result = await runner.run('step-1', handler, makeInput(), { timeoutMs: 50 });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('STEP_TIMEOUT');
+  });
+
+  it('passes the step input to the handler', async () => {
+    let receivedInput: StepInput | null = null;
+    const handler: StepHandler = (input) => { receivedInput = input; return 'ok'; };
+    const input = makeInput({ data: { key: 'val' }, context: { user: 'alice' } });
+    await runner.run('step-1', handler, input);
+    expect(receivedInput).toBe(input);
+  });
+
+  it('records durationMs greater than zero for slow handlers', async () => {
+    const handler: StepHandler = () => new Promise((res) => setTimeout(() => res('done'), 20));
+    const result = await runner.run('step-1', handler, makeInput());
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('attempt is 1 on first success', async () => {
+    const result = await runner.run('step-1', () => 'ok', makeInput());
+    expect(result.attempt).toBe(1);
   });
 });
