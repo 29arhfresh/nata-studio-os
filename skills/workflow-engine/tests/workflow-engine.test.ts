@@ -467,6 +467,9 @@ describe('Scheduler', () => {
   it('throws UNKNOWN_STEP for an unregistered step id', () => {
     const sched = new Scheduler([]);
     expect(() => sched.markRunning('ghost')).toThrow('UNKNOWN_STEP');
+    expect(() => sched.markCompleted('ghost')).toThrow('UNKNOWN_STEP');
+    expect(() => sched.markFailed('ghost')).toThrow('UNKNOWN_STEP');
+    expect(() => sched.markSkipped('ghost')).toThrow('UNKNOWN_STEP');
     expect(() => sched.getStatus('ghost')).toThrow('UNKNOWN_STEP');
   });
 
@@ -563,7 +566,7 @@ describe('StepRunner', () => {
   it('records durationMs greater than zero for slow handlers', async () => {
     const handler: StepHandler = () => new Promise((res) => setTimeout(() => res('done'), 20));
     const result = await runner.run('step-1', handler, makeInput());
-    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result.durationMs).toBeGreaterThan(0);
   });
 
   it('attempt is 1 on first success', async () => {
@@ -633,6 +636,16 @@ describe('workflowEngine.validate()', () => {
     const result = workflowEngine.validate(def);
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes('handler'))).toBe(true);
+  });
+
+  it('returns errors when a step depends on a non-existent step id', () => {
+    const def: WorkflowDefinition = {
+      id: 'wf',
+      steps: [{ id: 'a', dependsOn: ['does-not-exist'], handler: () => null }],
+    };
+    const result = workflowEngine.validate(def);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('UNKNOWN_DEPENDENCY'))).toBe(true);
   });
 });
 
@@ -727,5 +740,23 @@ describe('workflowEngine.run()', () => {
     expect(result.workflowId).toBe('test-wf');
     expect(result.startedAt).toBeGreaterThanOrEqual(before);
     expect(result.completedAt).toBeGreaterThanOrEqual(result.startedAt);
+  });
+
+  it('wraps primitive step output as { value } and routes it to a downstream step', async () => {
+    let receivedData: Record<string, unknown> = {};
+    const def = makeDef({
+      steps: [
+        { id: 'producer', dependsOn: [], handler: () => 42 },
+        {
+          id: 'consumer',
+          dependsOn: ['producer'],
+          handler: (inp) => { receivedData = inp.data; return null; },
+        },
+      ],
+      routes: [{ fromStep: 'producer', toStep: 'consumer', outputKey: 'value', inputKey: 'score' }],
+    });
+    const result = await workflowEngine.run(def);
+    expect(result.status).toBe('completed');
+    expect(receivedData['score']).toBe(42);
   });
 });

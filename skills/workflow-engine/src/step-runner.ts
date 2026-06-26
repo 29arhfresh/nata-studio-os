@@ -61,7 +61,11 @@ export class StepRunner {
       }
     }
 
-    return { stepId, status: 'failed', output: null, error: lastError, durationMs: 0, attempt };
+    // This branch is unreachable: the while loop always exits via a return
+    // inside the try or catch block. The TypeScript compiler requires a return
+    // after the loop; this satisfies that constraint without hiding a bug.
+    /* istanbul ignore next */
+    return { stepId, status: 'failed', output: null, error: lastError, durationMs: Date.now(), attempt };
   }
 
   private executeWithTimeout(
