@@ -108,15 +108,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Template library: 7 use-case templates (portrait, product, fashion, advertising, cinematic, character, consistent-character) and 6 model-specific templates (flux, midjourney, ideogram, imagen, nano-banana, magnific).
 - Typed TypeScript API planned for v1.x.
 
-**Prompt Architect** (`skills/prompt-architect/`) — AI-native Skill
+**Prompt Architect** (`skills/prompt-architect/`) — TypeScript Skill
 - Production-quality prompt engineering for prompts that run in production systems.
-- Execution driven by `SYSTEM_PROMPT.md`, `WORKFLOW.md`, and the template library. No TypeScript entrypoint.
-- `SYSTEM_PROMPT.md`: systematic prompt engineering persona with production-grade guidelines.
-- `WORKFLOW.md`: end-to-end process from requirements intake to production deployment.
-- `CHECKLIST.md`: pre-deployment quality gate with pass/fail criteria for every item.
-- `EXAMPLES.md`: 12 annotated production patterns with design rationale and failure modes.
+- Ships at `v0.2.0`: progressed from AI-native (`v0.1.0`) to a full TypeScript implementation within the development cycle.
+- `src/index.ts`: typed public API — `selectTemplate()`, `buildPrompt()`, `evaluatePrompt()`, `compressPrompt()`, `versionPrompt()`.
+- `buildPrompt()`: assembles system prompt and user template from a `PromptBrief`; auto-compresses when token budget is exceeded; scores quality across five dimensions.
+- `selectTemplate()`: returns a `TemplateDescriptor` with structure rules and required fields for all eight task types.
+- `evaluatePrompt()`: static analysis against a `TestCase` array; supports `expectedOutputContains`, `mustNotContain`, and `expectedOutputPattern` (regex); returns `EvaluationReport` with verdict, score, and recommendations.
+- `compressPrompt()`: removes optional sections and truncates to token budget; reports `sectionsRemoved` and `reductionPercent`.
+- `versionPrompt()`: derives `major`/`minor`/`patch` change type by diffing two prompts; bumps semver version; appends changelog entry.
+- AI-native execution layer (`SYSTEM_PROMPT.md`, `WORKFLOW.md`, and template library) remains available for AI-session use.
 - Template library: 8 structural templates covering chain-of-thought, code-generation, document-analysis, evaluation-judge, few-shot-classifier, multi-agent-orchestrator, role-persona, and structured-output.
-- Typed TypeScript API planned for v1.x.
+- Test suite: 642 lines.
 
 **Root documentation**
 - `README.md`: complete architecture reference, Quick Start guide, workflow diagram, installation instructions, development workflow, roadmap, and standards summary.

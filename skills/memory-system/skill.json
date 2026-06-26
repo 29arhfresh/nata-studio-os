@@ -4,6 +4,7 @@
   "description": "Manages short-term, long-term, project, and session memory across all Nata Studio OS Skills.",
   "author": "Nata Studio OS",
   "tags": ["memory", "context", "session", "retrieval", "indexing", "core"],
+  "type": "typescript",
   "entrypoint": "src/index.ts",
   "permissions": [],
   "dependencies": {}

@@ -23,7 +23,9 @@
 
 ## 1. Folder Structure
 
-Every Skill in Nata Studio OS must follow this exact directory layout:
+Nata Studio OS supports two Skill types. The required layout depends on the `type` declared in `skill.json`.
+
+**TypeScript Skill** (`"type": "typescript"`)
 
 ```
 skills/
@@ -38,12 +40,28 @@ skills/
         └── icon.svg
 ```
 
+**AI-native Skill** (`"type": "ai-native"`)
+
+```
+skills/
+└── <skill-name>/
+    ├── SKILL.md
+    ├── skill.json
+    ├── SYSTEM_PROMPT.md      # Primary entry point — loaded as the AI session instruction
+    ├── WORKFLOW.md
+    ├── CHECKLIST.md
+    ├── EXAMPLES.md
+    └── templates/            # Structural prompt templates
+        └── <template-name>.md
+```
+
 ### Rules
 
 - The `skills/` directory lives at the repository root.
 - `<skill-name>` must be lowercase, hyphen-separated (kebab-case). No underscores, no spaces.
-- `src/` holds all runtime logic. Sub-folders are permitted for complex Skills.
-- `tests/` is mandatory even when the Skill has no side effects.
+- `src/` holds all runtime logic for TypeScript Skills. Sub-folders are permitted for complex Skills.
+- `tests/` is mandatory for TypeScript Skills even when the Skill has no side effects.
+- AI-native Skills are executed by an AI model. `SYSTEM_PROMPT.md` is the required entrypoint.
 - `assets/` is optional. When included, only version-controlled, production-ready assets belong there.
 - No build artifacts (`dist/`, `out/`, `.cache/`) may be committed.
 
@@ -66,30 +84,32 @@ Machine-readable manifest. Must be valid JSON matching the schema below.
   "description": "string",
   "author": "string",
   "tags": ["string"],
+  "type": "typescript",
   "entrypoint": "src/index.ts",
   "permissions": [],
   "dependencies": {}
 }
 ```
 
-| Field          | Type             | Required | Description                                      |
-|----------------|------------------|----------|--------------------------------------------------|
-| `name`         | `string`         | Yes      | Matches the folder name exactly                  |
-| `version`      | `semver string`  | Yes      | Follows rules in [Section 9](#9-versioning)      |
-| `description`  | `string`         | Yes      | One sentence, ≤ 120 characters                   |
-| `author`       | `string`         | Yes      | Full name or GitHub handle                       |
-| `tags`         | `string[]`       | Yes      | At least one tag; all lowercase                  |
-| `entrypoint`   | `string`         | Yes      | Relative path to the primary entry file          |
-| `permissions`  | `string[]`       | Yes      | Empty array if none required                     |
-| `dependencies` | `object`         | Yes      | Empty object if none                             |
+| Field          | Type                            | Required | Description                                                          |
+|----------------|---------------------------------|----------|----------------------------------------------------------------------|
+| `name`         | `string`                        | Yes      | Matches the folder name exactly                                      |
+| `version`      | `semver string`                 | Yes      | Follows rules in [Section 9](#9-versioning)                          |
+| `description`  | `string`                        | Yes      | One sentence, ≤ 120 characters                                       |
+| `author`       | `string`                        | Yes      | Full name or GitHub handle                                           |
+| `tags`         | `string[]`                      | Yes      | At least one tag; all lowercase                                      |
+| `type`         | `"typescript" \| "ai-native"`   | Yes      | Execution model. Determines required folder layout (see Section 1)   |
+| `entrypoint`   | `string`                        | Yes      | `"src/index.ts"` for TypeScript Skills; `"SYSTEM_PROMPT.md"` for AI-native |
+| `permissions`  | `string[]`                      | Yes      | Empty array if none required                                         |
+| `dependencies` | `object`                        | Yes      | Empty object if none                                                 |
 
-### 2.3 `src/index.ts`
+### 2.3 `src/index.ts` — TypeScript Skills only
 
-The primary entry point. Must export a default function or class that represents the Skill's public interface.
+The primary entry point. Must export a default function or class that represents the Skill's public interface. Not required for AI-native Skills.
 
-### 2.4 `tests/<skill-name>.test.ts`
+### 2.4 `tests/<skill-name>.test.ts` — TypeScript Skills only
 
-At least one test file covering the core behaviour of the Skill. See [Section 5](#5-quality-requirements) for coverage requirements.
+At least one test file covering the core behaviour of the Skill. See [Section 5](#5-quality-requirements) for coverage requirements. Not required for AI-native Skills.
 
 ---
 
@@ -388,13 +408,24 @@ MAJOR.MINOR.PATCH
 ## Appendix A — Quick Reference Card
 
 ```
-New Skill checklist
-───────────────────
+New Skill checklist — TypeScript
+──────────────────────────────────
  skills/<name>/
    ├── SKILL.md        ← All 6 sections present
-   ├── skill.json      ← Valid manifest, semver, all fields
+   ├── skill.json      ← type: typescript, semver, all fields
    ├── src/index.ts    ← Default export, explicit types, no `any`
    └── tests/          ← ≥80% coverage, positive + negative cases
+
+New Skill checklist — AI-native
+─────────────────────────────────
+ skills/<name>/
+   ├── SKILL.md        ← All 6 sections present
+   ├── skill.json      ← type: ai-native, entrypoint: SYSTEM_PROMPT.md
+   ├── SYSTEM_PROMPT.md ← Agent persona and behavioural rules
+   ├── WORKFLOW.md
+   ├── CHECKLIST.md
+   ├── EXAMPLES.md
+   └── templates/      ← At least one structural template
 
 Commit format
 ─────────────
