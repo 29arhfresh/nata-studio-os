@@ -13,6 +13,8 @@ import type { StepNode } from '../src/dag-resolver';
 import { Scheduler } from '../src/scheduler';
 import { StepRunner } from '../src/step-runner';
 import type { StepInput, StepHandler } from '../src/step-runner';
+import workflowEngine from '../src/index';
+import type { WorkflowDefinition, WorkflowRunOptions } from '../src/index';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -567,5 +569,163 @@ describe('StepRunner', () => {
   it('attempt is 1 on first success', async () => {
     const result = await runner.run('step-1', () => 'ok', makeInput());
     expect(result.attempt).toBe(1);
+  });
+});
+
+// ─── 7. Public API (workflowEngine) ───────────────────────────────────────────
+
+describe('workflowEngine.validate()', () => {
+  it('returns valid: true for a well-formed definition', () => {
+    const def: WorkflowDefinition = {
+      id: 'wf',
+      steps: [{ id: 'a', dependsOn: [], handler: () => null }],
+    };
+    const result = workflowEngine.validate(def);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('returns errors for a missing workflow id', () => {
+    const def = { id: '', steps: [{ id: 'a', dependsOn: [], handler: () => null }] };
+    const result = workflowEngine.validate(def);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('id'))).toBe(true);
+  });
+
+  it('returns errors for an empty steps array', () => {
+    const def: WorkflowDefinition = { id: 'wf', steps: [] };
+    const result = workflowEngine.validate(def);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('step'))).toBe(true);
+  });
+
+  it('returns errors for duplicate step ids', () => {
+    const def: WorkflowDefinition = {
+      id: 'wf',
+      steps: [
+        { id: 'a', dependsOn: [], handler: () => null },
+        { id: 'a', dependsOn: [], handler: () => null },
+      ],
+    };
+    const result = workflowEngine.validate(def);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('Duplicate'))).toBe(true);
+  });
+
+  it('returns errors for a cyclic definition', () => {
+    const def: WorkflowDefinition = {
+      id: 'wf',
+      steps: [
+        { id: 'a', dependsOn: ['b'], handler: () => null },
+        { id: 'b', dependsOn: ['a'], handler: () => null },
+      ],
+    };
+    const result = workflowEngine.validate(def);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('Cycle'))).toBe(true);
+  });
+
+  it('returns errors when a step has no handler', () => {
+    const def = {
+      id: 'wf',
+      steps: [{ id: 'a', dependsOn: [], handler: 'not-a-function' as unknown as StepHandler }],
+    };
+    const result = workflowEngine.validate(def);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('handler'))).toBe(true);
+  });
+});
+
+describe('workflowEngine.run()', () => {
+  function makeDef(overrides: Partial<WorkflowDefinition> = {}): WorkflowDefinition {
+    return {
+      id: `wf-${Date.now()}`,
+      steps: [{ id: 'step-a', dependsOn: [], handler: () => ({ out: 1 }) }],
+      ...overrides,
+    };
+  }
+
+  it('runs a single-step workflow to completion', async () => {
+    const result = await workflowEngine.run(makeDef());
+    expect(result.status).toBe('completed');
+    expect(result.stepResults).toHaveLength(1);
+    expect(result.error).toBeNull();
+  });
+
+  it('runs a linear two-step workflow in dependency order', async () => {
+    const order: string[] = [];
+    const def = makeDef({
+      steps: [
+        { id: 'first',  dependsOn: [],       handler: () => { order.push('first'); return 'a'; } },
+        { id: 'second', dependsOn: ['first'], handler: () => { order.push('second'); return 'b'; } },
+      ],
+    });
+    const result = await workflowEngine.run(def);
+    expect(result.status).toBe('completed');
+    expect(order).toEqual(['first', 'second']);
+  });
+
+  it('routes output data from one step to the next', async () => {
+    let receivedData: Record<string, unknown> = {};
+    const def = makeDef({
+      steps: [
+        { id: 'producer', dependsOn: [], handler: () => ({ score: 99 }) },
+        { id: 'consumer', dependsOn: ['producer'], handler: (inp) => { receivedData = inp.data; return 'ok'; } },
+      ],
+      routes: [{ fromStep: 'producer', toStep: 'consumer', outputKey: 'score', inputKey: 'myScore' }],
+    });
+    await workflowEngine.run(def);
+    expect(receivedData['myScore']).toBe(99);
+  });
+
+  it('returns status failed when a step fails', async () => {
+    const def = makeDef({
+      steps: [{ id: 'bad', dependsOn: [], handler: () => { throw new Error('step-error'); } }],
+    });
+    const result = await workflowEngine.run(def);
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('step-error');
+  });
+
+  it('emits lifecycle events in order', async () => {
+    const types: string[] = [];
+    const opts: WorkflowRunOptions = { onEvent: (e) => types.push(e.type) };
+    await workflowEngine.run(makeDef(), opts);
+    expect(types[0]).toBe('workflow:started');
+    expect(types).toContain('step:started');
+    expect(types).toContain('step:completed');
+    expect(types[types.length - 1]).toBe('workflow:completed');
+  });
+
+  it('emits workflow:failed event when a step fails', async () => {
+    const types: string[] = [];
+    const def = makeDef({
+      steps: [{ id: 'bad', dependsOn: [], handler: () => { throw new Error('oops'); } }],
+    });
+    await workflowEngine.run(def, { onEvent: (e) => types.push(e.type) });
+    expect(types).toContain('workflow:failed');
+  });
+
+  it('provides initial context to step handlers', async () => {
+    let ctx: Record<string, unknown> = {};
+    const def = makeDef({
+      steps: [{ id: 'a', dependsOn: [], handler: (inp) => { ctx = inp.context; return null; } }],
+    });
+    await workflowEngine.run(def, { context: { tenantId: 't-1' } });
+    expect(ctx['tenantId']).toBe('t-1');
+  });
+
+  it('throws INVALID_WORKFLOW for an invalid definition', async () => {
+    const def: WorkflowDefinition = { id: '', steps: [] };
+    await expect(workflowEngine.run(def)).rejects.toThrow('INVALID_WORKFLOW');
+  });
+
+  it('includes workflowId and timestamps in the result', async () => {
+    const def = makeDef({ id: 'test-wf' });
+    const before = Date.now();
+    const result = await workflowEngine.run(def);
+    expect(result.workflowId).toBe('test-wf');
+    expect(result.startedAt).toBeGreaterThanOrEqual(before);
+    expect(result.completedAt).toBeGreaterThanOrEqual(result.startedAt);
   });
 });
