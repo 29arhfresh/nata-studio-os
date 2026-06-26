@@ -408,15 +408,18 @@ console.log(sequence.totalDuration); // 18
 ```typescript
 import { create, search } from './skills/knowledge-manager/src/index';
 
-await create({
+create({
   type: 'procedure',
   title: 'Consistent character workflow',
-  body: '...',
+  content: 'Use IP-Adapter or seed anchoring to preserve character appearance across generations...',
   tags: ['image', 'character', 'flux'],
   status: 'active',
+  author: 'ai-image-director',
+  version: '0.1.0',
 });
 
-const results = await search({ query: 'character consistency', strategy: 'hybrid' });
+const results = search({ query: 'character consistency', strategy: 'hybrid' });
+console.log(results.entries[0].entry.title); // 'Consistent character workflow'
 ```
 
 ---
