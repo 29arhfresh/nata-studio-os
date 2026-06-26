@@ -7,7 +7,7 @@ Creative Director is the strategic and aesthetic intelligence of Nata Studio OS.
 ## Usage
 
 ```typescript
-import director from './src/index.ts';
+import director from './src/index';
 
 const brief = director.buildCreativeBrief({
   brand: 'Maison Éclat',

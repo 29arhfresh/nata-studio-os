@@ -2,7 +2,7 @@
   "name": "creative-director",
   "version": "0.1.0",
   "description": "The creative decision-making system of Nata Studio OS — strategy, visual direction, brand consistency, and concept development.",
-  "author": "NATA Studio OS",
+  "author": "Nata Studio OS",
   "tags": ["creative", "strategy", "brand", "visual-direction", "art-direction", "moodboard", "storytelling"],
   "entrypoint": "src/index.ts",
   "permissions": [],

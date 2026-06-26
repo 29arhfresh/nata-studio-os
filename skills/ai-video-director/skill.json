@@ -2,7 +2,7 @@
   "name": "ai-video-director",
   "version": "0.1.0",
   "description": "Engineer AI video prompts, plan shots, storyboard sequences, and direct multi-model video production pipelines.",
-  "author": "NATA Studio OS",
+  "author": "Nata Studio OS",
   "tags": ["video", "ai", "director", "prompting", "production", "cinematic", "storyboard"],
   "entrypoint": "src/index.ts",
   "permissions": [],
