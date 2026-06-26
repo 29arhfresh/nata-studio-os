@@ -1,0 +1,10 @@
+{
+  "name": "agent-orchestrator",
+  "version": "0.1.0",
+  "description": "Central brain that routes requests, coordinates Skills, manages execution order, and enforces quality gates.",
+  "author": "Nata Studio OS",
+  "tags": ["orchestrator", "routing", "coordination", "core", "meta"],
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {}
+}
