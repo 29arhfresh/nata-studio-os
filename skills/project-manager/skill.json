@@ -1,0 +1,10 @@
+{
+  "name": "project-manager",
+  "version": "0.1.0",
+  "description": "Manages project lifecycle, tasks, milestones, roadmaps, risks, and health scoring across Nata Studio OS.",
+  "author": "Nata Studio OS",
+  "tags": ["project", "planning", "tasks", "milestones", "roadmap", "risks", "tracking", "core"],
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {}
+}
