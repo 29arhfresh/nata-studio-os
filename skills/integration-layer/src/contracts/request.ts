@@ -11,7 +11,6 @@ export interface InvocationOptions {
   readonly timeoutMs?: number;
   readonly maxRetries?: number;
   readonly retryDelayMs?: number;
-  readonly qualityThreshold?: number;
 }
 
 // ─── Request ──────────────────────────────────────────────────────────────────

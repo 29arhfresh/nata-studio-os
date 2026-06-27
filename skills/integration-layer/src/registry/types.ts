@@ -38,6 +38,8 @@ export interface ICapabilityRegistry {
   register(manifest: SkillManifest, adapter: ISkillAdapter): void;
   unregister(skillName: string): void;
   discover(query: DiscoveryQuery): SkillManifest[];
+  /** Like discover({ capability }), but throws CapabilityNotAvailableError when empty. */
+  requireCapability(capability: string): SkillManifest[];
   findByName(name: string): SkillManifest | undefined;
   getAdapter(skillName: string): ISkillAdapter | undefined;
   listAll(): SkillManifest[];

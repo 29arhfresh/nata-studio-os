@@ -3,7 +3,7 @@
  * Supports registration, discovery by capability/tag/operation, and lookup by name.
  */
 
-import { RegistryError } from '../contracts/errors';
+import { CapabilityNotAvailableError, RegistryError } from '../contracts/errors';
 import type { ISkillAdapter } from '../invocation/types';
 import type { DiscoveryQuery, ICapabilityRegistry, SkillManifest } from './types';
 
@@ -62,6 +62,14 @@ export class CapabilityRegistry implements ICapabilityRegistry {
     }
 
     return results.sort((a, b) => b.priority - a.priority);
+  }
+
+  requireCapability(capability: string): SkillManifest[] {
+    const results = this.discover({ capability });
+    if (results.length === 0) {
+      throw new CapabilityNotAvailableError(capability);
+    }
+    return results;
   }
 
   findByName(name: string): SkillManifest | undefined {

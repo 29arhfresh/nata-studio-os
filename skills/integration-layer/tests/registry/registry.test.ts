@@ -1,4 +1,4 @@
-import { RegistryError } from '../../src/contracts/errors';
+import { CapabilityNotAvailableError, RegistryError } from '../../src/contracts/errors';
 import { CapabilityRegistry } from '../../src/registry/registry';
 import type { SkillManifest } from '../../src/registry/types';
 import type { ISkillAdapter } from '../../src/invocation/types';
@@ -195,6 +195,32 @@ describe('CapabilityRegistry.hasCapability', () => {
     const reg = new CapabilityRegistry();
     reg.register(makeManifest(), makeAdapter('memory-system'));
     expect(reg.hasCapability('video-generation')).toBe(false);
+  });
+});
+
+describe('CapabilityRegistry.requireCapability', () => {
+  it('returns manifests when capability is registered', () => {
+    const reg = new CapabilityRegistry();
+    reg.register(makeManifest({ capabilities: ['memory-management'] }), makeAdapter('memory-system'));
+    const results = reg.requireCapability('memory-management');
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('memory-system');
+  });
+
+  it('throws CapabilityNotAvailableError when no skill provides the capability', () => {
+    const reg = new CapabilityRegistry();
+    reg.register(makeManifest(), makeAdapter('memory-system'));
+    expect(() => reg.requireCapability('video-generation')).toThrow(CapabilityNotAvailableError);
+  });
+
+  it('CapabilityNotAvailableError carries the missing capability in its message', () => {
+    const reg = new CapabilityRegistry();
+    try {
+      reg.requireCapability('video-generation');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CapabilityNotAvailableError);
+      expect((err as CapabilityNotAvailableError).message).toContain('video-generation');
+    }
   });
 });
 

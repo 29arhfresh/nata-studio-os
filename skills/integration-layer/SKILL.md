@@ -161,7 +161,7 @@ const result = aggregator.aggregate([briefRes, promptRes]);
 
 console.log(result.metadata.successCount);   // 2
 console.log(result.metadata.averageQualityScore);
-console.log(result.merged);                  // deep-merged output object
+console.log(result.merged);                  // shallow-merged output object
 ```
 
 ### 6. Observability
@@ -205,7 +205,7 @@ span.finish();
 | `operation` | `string` | Yes | Operation name within the Skill |
 | `input` | `TInput` | Yes | Operation-specific input payload |
 | `context` | `SharedContext` | Yes | Shared context object |
-| `options` | `InvocationOptions` | No | Timeout, retry, quality threshold |
+| `options` | `InvocationOptions` | No | Timeout and retry configuration |
 
 ### InvocationOptions
 
@@ -214,7 +214,6 @@ span.finish();
 | `timeoutMs` | `number` | `30_000` | Per-invocation timeout |
 | `maxRetries` | `number` | `0` | Retry count on transient failure |
 | `retryDelayMs` | `number` | `250` | Base delay between retries (linear backoff) |
-| `qualityThreshold` | `number` | — | Minimum acceptable quality score (0–1) |
 
 ### CapabilityRegistry.register(manifest, adapter)
 
@@ -239,7 +238,7 @@ All errors extend `IntegrationError` and carry a typed `code`.
 | `SkillInvocationError` | `SKILL_INVOCATION_FAILED` | Adapter threw after exhausting retries |
 | `SkillTimeoutError` | `SKILL_TIMEOUT` | Adapter did not resolve within `timeoutMs` |
 | `AggregationError` | `AGGREGATION_FAILED` | Aggregator encountered a null/undefined output |
-| `CapabilityNotAvailableError` | `CAPABILITY_NOT_AVAILABLE` | No registered Skill provides the queried capability |
+| `CapabilityNotAvailableError` | `CAPABILITY_NOT_AVAILABLE` | `requireCapability()` found no registered Skill with the requested capability |
 | `ContextInvalidError` | `CONTEXT_INVALID` | SharedContext validation failed |
 | `RegistryError` | `REGISTRY_ERROR` | Duplicate registration or unregister of unknown Skill |
 | `AdapterError` | `ADAPTER_ERROR` | Adapter-level dispatch error (unknown operation or Skill throws) |
@@ -277,6 +276,15 @@ These are proven constraints of the current implementation, not theoretical conc
 
 **4. CapabilityRegistry holds adapters in memory with no eviction**
 Adapters registered at startup remain in memory for the process lifetime. Hot-reloading a Skill at runtime requires `unregister()` followed by `register()` — there is no automatic reload mechanism.
+
+**5. `ResponseMetadata.warnings` is always an empty array**
+`createResponse` accepts a `warnings` parameter and `ResponseMetadata` exposes the field, but no current adapter populates it. Callers can check `response.metadata.warnings`, but they will always receive `[]` until adapters are updated to emit warnings.
+
+**6. `ResponseMetadata.attempt` is always `1`**
+Each adapter constructs the response itself via `createResponse`, so `attempt` is always the default of `1` regardless of how many retries `SkillInvoker` performed. The `attempt` count is known to the invoker but is not threaded through to the adapter's `createResponse` call.
+
+**7. `SharedContext` is shallow-frozen, not deeply immutable**
+`createContext` and `patchContext` call `Object.freeze()` on the top-level context object, but nested objects inside `memory.values` and `metadata` are not automatically frozen. Callers who mutate nested values bypass the readonly type signature at runtime.
 
 ---
 
