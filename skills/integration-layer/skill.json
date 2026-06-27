@@ -1,0 +1,11 @@
+{
+  "name": "integration-layer",
+  "version": "0.1.0",
+  "description": "Integration Layer — shared contracts, capability registry, Skill invocation API, result aggregation, error propagation, and observability interfaces that transform independent Skills into one coherent operating system.",
+  "author": "Nata Studio OS",
+  "tags": ["integration", "registry", "contracts", "observability", "core", "meta"],
+  "type": "typescript",
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {}
+}
