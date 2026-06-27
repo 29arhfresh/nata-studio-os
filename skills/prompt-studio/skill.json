@@ -1,0 +1,11 @@
+{
+  "name": "prompt-studio",
+  "version": "0.1.0",
+  "description": "Manages a prompt library with categories, tags, variables, versions, templates, search, and import/export.",
+  "author": "Nata Studio OS",
+  "tags": ["prompts", "library", "templates", "versioning", "search", "ai", "productivity", "core"],
+  "type": "typescript",
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {}
+}
