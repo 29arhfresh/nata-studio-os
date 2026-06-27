@@ -762,7 +762,7 @@ export function previewPrompt(promptId: PromptId, variableValues: Record<string,
   }
 
   const rendered = _renderContent(prompt.content, effectiveValues);
-  const updated: Prompt = { ...prompt, usageCount: prompt.usageCount + 1, updatedAt: _nowIso() };
+  const updated: Prompt = { ...prompt, usageCount: prompt.usageCount + 1 };
   _prompts.set(promptId, updated);
   _addHistory(promptId, 'used', `Prompt previewed with ${Object.keys(variableValues).length} variable(s).`);
 
