@@ -6,13 +6,23 @@ Observed while building AI Creative Director (Milestone 2). These are real limit
 
 ## 1. Sequential execution only
 
-**Impact:** High
+**Impact:** Unverified — hypothesis only, not observed in this Skill.
 
-All ready steps execute one after another even when they have no data dependency. In the AI Creative Director brief workflow, `select-tool` and `generate-prompts` are sequenced because `generate-prompts` needs the tool selection — but if two concept-exploration branches existed, they could not run in parallel.
+All ready steps execute one after another even when they have no data dependency. This is a real architectural constraint, but it did not affect AI Creative Director because the brief workflow is a strict linear chain with genuine data dependencies at every step:
 
-**Workaround used:** Designed the workflow as a strict linear chain so the sequential model is never a bottleneck.
+```
+validate-brief → develop-concept → select-tool → generate-prompts → plan-production
+```
 
-**Needed for Phase B:** Parallel step execution for steps with independent `dependsOn` lists.
+Every step requires the previous step's output. No two steps in this workflow could run in parallel even if the engine supported it. The sequential constraint did not cause any slowdown or force any design compromise here.
+
+The impact becomes real when a workflow has genuinely independent branches — for example, two parallel concept-exploration paths that both feed a final synthesis step. No such workflow exists in the codebase yet.
+
+**Workaround used:** None required. The workflow is linear because its data dependencies are linear.
+
+**Evidence from this Skill:** Insufficient. This gap is a hypothesis about future workflow shapes, not a measured impact from current usage.
+
+**Needed for Phase B:** Parallel step execution for steps with independent `dependsOn` lists. Priority should be re-evaluated when a Skill requires a workflow with provably independent branches.
 
 ---
 
@@ -80,11 +90,13 @@ One step failure terminates the entire workflow and discards all partial outputs
 
 | Gap                         | Phase B Priority | Workaround Available |
 |-----------------------------|------------------|----------------------|
-| Sequential execution        | High             | Yes — linear chains  |
+| Sequential execution        | Unverified       | N/A — not triggered  |
 | No context mutation         | Medium           | Yes — fan-out routes |
 | No conditional branching    | Medium           | Yes — in-handler if  |
 | Weak input typing           | Medium           | Yes — cast + validate |
 | Fail-fast / no partial result | Low            | Yes — early validation |
 | No retry backoff            | Low              | Yes — not needed yet |
 
-**Overall verdict:** Workflow Engine v1.0 is capable of supporting real production workflows. None of the gaps above blocked delivery of AI Creative Director. The engine's event system, DataRouter, and retry primitives provide a solid foundation. Phase B should prioritise parallel execution and context mutation as the two highest-leverage improvements.
+**Overall verdict:** Workflow Engine v1.0 is capable of supporting real production workflows. None of the gaps above blocked delivery of AI Creative Director. The engine's event system, DataRouter, and retry primitives provide a solid foundation.
+
+Of the gaps above, only gaps 2–4 were directly observed during implementation. Gaps 1 and 6 are hypotheses about future usage patterns and require evidence from a second Skill before a Phase B priority can be assigned. Gap 2 (no context mutation, 10 routes for 5 steps) is the most clearly evidenced friction from this Skill.
