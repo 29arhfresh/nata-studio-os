@@ -248,13 +248,23 @@ console.log(summary.text);
 
 ## Architectural Limitations
 
-**In-memory storage only.** The `_store` Map lives in the process. All data is lost when the process restarts. A production deployment must replace the Map with a durable backend (e.g., Redis, SQLite, or a vector DB) behind the same interface.
+**In-memory storage only.** The `_store` Map lives in the process. All data is lost when the process restarts. Introducing a durable backend (e.g., Redis, SQLite, or a vector DB) does not require changing the public API, but does require editing all `_store` call sites throughout `src/index.ts` because there is no storage-adapter interface. Concentrating storage access behind a `MemoryStore` interface is the correct upgrade path.
 
-**Semantic search is approximated by term frequency.** `findRelated` and the `semantic` strategy use tokenised keyword overlap rather than embedding-based cosine similarity. Retrieval quality degrades for queries whose intent diverges from the literal key/value text. Integrating an embedding model (e.g., via `@anthropic-ai/sdk` embeddings) would be the natural upgrade path.
+**Semantic search is approximated by term frequency.** `findRelated` and the `semantic` strategy use tokenised keyword overlap rather than embedding-based cosine similarity. Retrieval quality degrades for queries whose intent diverges from the literal key/value text. Integrating an embedding model would be the natural upgrade path.
 
-**Aging decays stored quality scores on demand.** `applyAging()` must be called explicitly; there is no background timer. Quality scores therefore reflect the last `applyAging()` call, not real-time decay. Scheduled pruning via the Workflow Engine's StepRunner resolves this in deployment.
+**Aging requires an external scheduler.** `applyAging()` must be called explicitly. The Workflow Engine is a one-shot DAG executor — it can run a step that calls `applyAging()`, but it cannot trigger that execution on a recurring schedule. Recurrence must come from an external trigger: an OS cron job, a `setInterval` loop in the host process, or a dedicated scheduler service.
+
+**Scoring weights are compile-time constants.** Quality score weights, relevance weights, and `findRelated` weights are hardcoded literals in `_scoreQuality`, `_relevanceScore`, and `findRelated`. They cannot be tuned at runtime without modifying source.
 
 ## Changelog
+
+### [0.2.1] — 2026-06-27
+
+- Fixed `_agingFactor()` to use `createdAt` instead of `updatedAt` — administrative calls to `applyAging()` and `reScore()` were resetting the age clock on every invocation, making subsequent aging passes compute age ≈ 0 and return factor ≈ 1.0.
+- Fixed `applyAging()` and `reScore()` to not mutate `updatedAt` when writing a new quality score — scoring is not a user-visible update.
+- Corrected `store()` docstring: each call produces a new item with a distinct ID; there is no upsert-by-key behaviour.
+- Corrected scheduling limitation: the Workflow Engine is a one-shot executor and cannot schedule recurring calls to `applyAging()`; an external trigger is required.
+- Added compile-time scoring weights as a documented limitation.
 
 ### [0.2.0] — 2026-06-27
 

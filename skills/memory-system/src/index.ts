@@ -295,9 +295,12 @@ function _isExpired(item: MemoryItem): boolean {
 // ─── Memory Aging ─────────────────────────────────────────────────────────────
 
 // Returns a 0–1 multiplier that decays exponentially with item age.
+// Uses createdAt so that administrative operations (reScore, applyAging) do not
+// reset the age clock. User-initiated update() calls intentionally change updatedAt
+// but should not affect how old the original information is.
 function _agingFactor(item: MemoryItem): number {
   const halfLife = TIER_AGING_HALF_LIFE_SECONDS[item.tier] ?? 86_400;
-  const ageSec = (Date.now() - new Date(item.updatedAt).getTime()) / 1_000;
+  const ageSec = (Date.now() - new Date(item.createdAt).getTime()) / 1_000;
   return Math.max(AGING_MIN_FACTOR, Math.pow(0.5, ageSec / halfLife));
 }
 
@@ -354,7 +357,7 @@ export function validate(input: Partial<StoreInput>): ValidationResult {
 
 // ─── Write Operations ─────────────────────────────────────────────────────────
 
-/** Store a new memory item or overwrite an existing key in the same scope. */
+/** Store a new memory item. Each call produces a distinct item with a new ID; there is no upsert-by-key behaviour. Use update() to patch an existing item by ID. */
 export function store(input: StoreInput): MemoryItem {
   const validation = validate(input);
   if (!validation.isValid) {
@@ -966,7 +969,7 @@ export function reScore(): number {
       sessionId: item.sessionId,
       metadata: item.metadata,
     });
-    _store.set(item.id, { ...item, qualityScore: newScore, updatedAt: _now() });
+    _store.set(item.id, { ...item, qualityScore: newScore });
     count += 1;
   }
   return count;
@@ -1000,7 +1003,7 @@ export function applyAging(options: AgingOptions = {}): number {
       metadata: item.metadata,
     });
     const decayed = Math.max(AGING_MIN_FACTOR, baseScore * _agingFactor(item));
-    _store.set(item.id, { ...item, qualityScore: Number(decayed.toFixed(4)), updatedAt: _now() });
+    _store.set(item.id, { ...item, qualityScore: Number(decayed.toFixed(4)) });
     count += 1;
   }
   return count;
