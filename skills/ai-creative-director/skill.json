@@ -1,0 +1,13 @@
+{
+  "name": "ai-creative-director",
+  "version": "0.1.0",
+  "description": "Orchestrates the full AI creative production lifecycle — from brief to prompt to tool selection to quality review — using the Workflow Engine as its execution backbone.",
+  "author": "Nata Studio OS",
+  "tags": ["creative", "ai-tools", "prompts", "workflow", "production", "video", "image", "quality-review"],
+  "type": "typescript",
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {
+    "workflow-engine": "0.1.0"
+  }
+}
