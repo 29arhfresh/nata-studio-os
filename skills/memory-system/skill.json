@@ -1,6 +1,6 @@
 {
   "name": "memory-system",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Manages short-term, long-term, project, and session memory across all Nata Studio OS Skills.",
   "author": "Nata Studio OS",
   "tags": ["memory", "context", "session", "retrieval", "indexing", "core"],

@@ -2,38 +2,49 @@
 
 ## Overview
 
-Memory System is the unified memory layer for Nata Studio OS. It manages four memory tiers — short-term, long-term, project, and session — and exposes a single, consistent API for every Skill that needs to store, retrieve, summarize, or prune memory. All context handoffs between Skills, semantic memory searches, memory quality scoring, and scheduled pruning run through this Skill.
+Memory System is the unified memory layer for Nata Studio OS. It manages four memory tiers — short-term, long-term, project, and session — and exposes a single, consistent API for every Skill that needs to store, retrieve, summarize, or prune memory. All context handoffs between Skills, semantic memory searches, memory quality scoring, memory aging, conversation history, and related-memory retrieval run through this Skill. Business logic is fully independent of the storage layer, making it straightforward to swap the in-memory store for a durable backend.
 
 ## Usage
 
 ```typescript
 import memorySystem from './src/index';
 
-// Store a short-term memory item
+// Store a long-term memory item
 const item = memorySystem.store({
-  tier: 'short-term',
-  scope: 'session',
-  key: 'last-image-style',
-  value: 'cinematic neon noir',
-  ttlSeconds: 3600,
-  tags: ['style', 'image'],
-  source: 'ai-image-director',
+  tier: 'long-term',
+  scope: 'project',
+  key: 'brand:palette:v2',
+  value: { colors: ['#0a0a0a', '#ff4d00'], mood: 'neon noir' },
+  tags: ['brand', 'color', 'approved'],
+  source: 'creative-director',
+  projectId: 'proj-001',
+  metadata: { approvedAt: '2026-06-27' },
 });
 
 // Retrieve with semantic search
 const results = memorySystem.search({
-  query: 'image style preference',
-  tiers: ['short-term', 'long-term'],
+  query: 'brand color palette',
+  tiers: ['long-term'],
   limit: 5,
 });
 
-// Restore context for a new session
-const context = memorySystem.restoreContext({
-  scope: 'session',
-  sessionId: 'sess-abc123',
-  limit: 20,
+// Find related memories
+const related = memorySystem.findRelated(item.id, { limit: 3 });
+
+// Record and retrieve conversation history
+memorySystem.recordTurn({ sessionId: 'sess-001', role: 'user', content: 'What is the brand palette?' });
+const history = memorySystem.getHistory({ sessionId: 'sess-001' });
+
+// Assemble a token-budgeted context block for LLM injection
+const ctx = memorySystem.assembleContext({
+  sessionId: 'sess-001',
+  projectId: 'proj-001',
+  tokenBudget: 2000,
+  query: 'brand style',
 });
-console.log(context.items.length);
+
+// Apply time-based aging to quality scores
+memorySystem.applyAging({ tiers: ['short-term'] });
 ```
 
 ## Parameters
@@ -65,13 +76,62 @@ console.log(context.items.length);
 |---|---|---|---|---|
 | `query` | `string` | Yes | — | Plain-language or keyword search string. |
 | `tiers` | `MemoryTier[]` | No | all tiers | Restrict results to these memory tiers. |
-| `scope` | `MemoryScope` | No | `'global'` | Restrict results to this scope. |
+| `scope` | `MemoryScope` | No | all scopes | Restrict results to this scope. |
 | `tags` | `string[]` | No | `[]` | Restrict results to items with at least one matching tag. |
 | `limit` | `number` | No | `10` | Maximum items to return. |
 | `minQualityScore` | `number` | No | `0` | Minimum quality score (0–1) for inclusion. |
 | `includeExpired` | `boolean` | No | `false` | When true, expired items are included in results. |
-| `projectId` | `string` | No | `undefined` | Restrict to a specific project scope. |
-| `sessionId` | `string` | No | `undefined` | Restrict to a specific session scope. |
+| `projectId` | `string` | No | `undefined` | Restrict to a specific project. |
+| `sessionId` | `string` | No | `undefined` | Restrict to a specific session. |
+| `strategy` | `RetrievalStrategy` | No | `'hybrid'` | `exact`, `semantic`, `tag-match`, or `hybrid`. |
+
+### `findRelated(id, options?)`
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `id` | `MemoryId` | Yes | — | Anchor item ID to find relatives for. |
+| `limit` | `number` | No | `5` | Maximum items to return. |
+| `minScore` | `number` | No | `0.1` | Minimum composite similarity score. |
+| `tiers` | `MemoryTier[]` | No | all tiers | Restrict to these tiers. |
+| `scope` | `MemoryScope` | No | all scopes | Restrict to this scope. |
+
+### `recordTurn(input)`
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `sessionId` | `string` | Yes | — | The session this turn belongs to. |
+| `role` | `ConversationRole` | Yes | — | `user`, `assistant`, or `system`. |
+| `content` | `string` | Yes | — | The turn's text content. |
+| `metadata` | `Record<string, unknown>` | No | `{}` | Additional turn metadata. |
+
+### `getHistory(options)`
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `sessionId` | `string` | Yes | — | The session to retrieve history for. |
+| `limit` | `number` | No | `50` | Maximum number of turns to return (most recent). |
+| `includeSystem` | `boolean` | No | `true` | When false, system turns are excluded. |
+
+### `assembleContext(options)`
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `sessionId` | `string` | Yes | — | Session to assemble context for. |
+| `projectId` | `string` | No | `undefined` | Include project-scoped memories when provided. |
+| `tokenBudget` | `number` | No | `4000` | Maximum token budget across all sections. |
+| `includeHistory` | `boolean` | No | `true` | Include conversation history as a section. |
+| `historyLimit` | `number` | No | `10` | Maximum history turns to include. |
+| `memoryTiers` | `MemoryTier[]` | No | `['long-term']` | Tiers to search for the long-term memory section. |
+| `query` | `string` | No | `''` | Search query to rank memory sections. |
+
+### `applyAging(options?)`
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `tiers` | `MemoryTier[]` | No | all tiers | Restrict aging to these tiers. |
+| `scope` | `MemoryScope` | No | all scopes | Restrict aging to this scope. |
+| `projectId` | `string` | No | `undefined` | Restrict to a specific project. |
+| `sessionId` | `string` | No | `undefined` | Restrict to a specific session. |
 
 ### `restoreContext(options)`
 
@@ -91,8 +151,9 @@ console.log(context.items.length);
 | `sessionId` | `string` | No | `undefined` | Session ID for session-scoped summaries. |
 | `projectId` | `string` | No | `undefined` | Project ID for project-scoped summaries. |
 | `maxItems` | `number` | No | `50` | Maximum items to include in the summary. |
+| `tiers` | `MemoryTier[]` | No | all tiers | Tiers to include. |
 
-### `prune(options)`
+### `prune(options?)`
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -113,95 +174,62 @@ console.log(context.items.length);
 
 ## Examples
 
-### Minimal — store and retrieve a session preference
+### Minimal — record a conversation and restore context
 
 ```typescript
 import memorySystem from './src/index';
 
-// Store a user preference in session memory
-const item = memorySystem.store({
-  tier: 'short-term',
-  scope: 'session',
-  key: 'preferred-aspect-ratio',
-  value: '16:9',
-  ttlSeconds: 7200,
-  tags: ['preference', 'video'],
-  source: 'ai-video-director',
-  sessionId: 'sess-001',
-  metadata: {},
-});
+memorySystem.recordTurn({ sessionId: 'sess-01', role: 'user', content: 'Show me cinematic references.' });
+memorySystem.recordTurn({ sessionId: 'sess-01', role: 'assistant', content: 'Here are five references...' });
 
-// Retrieve it directly
-const retrieved = memorySystem.get(item.id);
-console.log(retrieved.value); // '16:9'
+const history = memorySystem.getHistory({ sessionId: 'sess-01' });
+console.log(history.turns.length); // 2
+
+const ctx = memorySystem.assembleContext({ sessionId: 'sess-01', tokenBudget: 1000 });
+console.log(ctx.sections[0].label); // 'Conversation History'
 ```
 
-### Realistic — cross-skill context handoff with semantic search and pruning
+### Realistic — full cross-skill workflow with aging and related memory
 
 ```typescript
 import memorySystem from './src/index';
 
-// 1. AI Image Director stores style decisions made during a session
-memorySystem.store({
+// 1. Store brand style in long-term project memory
+const brandItem = memorySystem.store({
   tier: 'long-term',
   scope: 'project',
-  key: 'brand-style-v2',
-  value: {
-    palette: ['#0a0a0a', '#ff4d00', '#f5f5f5'],
-    mood: 'cinematic neon noir',
-    referenceImages: ['img-001', 'img-002'],
-  },
-  tags: ['brand', 'style', 'image', 'approved'],
-  source: 'ai-image-director',
-  projectId: 'proj-nata-rebrand',
-  metadata: { approvedBy: 'creative-director', approvedAt: '2026-06-26' },
+  key: 'brand:style:v2',
+  value: { palette: ['#0a0a0a', '#ff4d00'], mood: 'cinematic neon noir' },
+  tags: ['brand', 'style', 'approved'],
+  source: 'creative-director',
+  projectId: 'proj-nata',
+  metadata: { approvedBy: 'art-director', version: 2 },
 });
 
-// 2. AI Video Director retrieves the brand style via semantic search
-const styleResults = memorySystem.search({
-  query: 'brand style palette mood',
-  tiers: ['long-term'],
-  scope: 'project',
-  tags: ['brand'],
-  limit: 3,
-  projectId: 'proj-nata-rebrand',
-});
-console.log(styleResults.items[0].item.key); // 'brand-style-v2'
+// 2. Find related memories (similar tags / key segments)
+const related = memorySystem.findRelated(brandItem.id, { limit: 5 });
+console.log(related.items.length); // related items by tag/key/value similarity
 
-// 3. Restore full project context at session start
-const context = memorySystem.restoreContext({
-  scope: 'project',
-  projectId: 'proj-nata-rebrand',
-  tiers: ['long-term', 'project'],
-  limit: 30,
+// 3. Assemble context for a new LLM call
+const ctx = memorySystem.assembleContext({
+  sessionId: 'sess-002',
+  projectId: 'proj-nata',
+  tokenBudget: 2000,
+  query: 'brand style palette',
 });
-console.log(`Restored ${context.items.length} memory items`);
+// ctx.sections: ['Conversation History', 'Project Context', 'Long-Term Memory']
 
-// 4. Summarize the session before it ends
-const summary = memorySystem.summarize({
-  scope: 'session',
-  sessionId: 'sess-001',
-  maxItems: 50,
-});
+// 4. Apply aging to short-term items (decays quality scores over time)
+const aged = memorySystem.applyAging({ tiers: ['short-term', 'session'] });
+console.log(`Aged ${aged} items`);
+
+// 5. Prune expired and stale items
+const pruneReport = memorySystem.prune({ expiredOnly: false, minQualityScore: 0.1 });
+console.log(`Pruned ${pruneReport.removed} items`);
+
+// 6. Generate a Markdown summary for the session
+const summary = memorySystem.summarize({ scope: 'session', sessionId: 'sess-002' });
 console.log(summary.text);
-
-// 5. Hand off context to Prompt Architect
-const handoffResult = memorySystem.handoff({
-  fromSkill: 'ai-image-director',
-  toSkill: 'prompt-architect',
-  sessionId: 'sess-001',
-  keys: ['brand-style-v2', 'preferred-aspect-ratio'],
-});
-console.log(`Handed off ${handoffResult.transferred} items`);
-
-// 6. Prune expired and low-quality items
-const pruneResult = memorySystem.prune({
-  expiredOnly: false,
-  tier: 'short-term',
-  minQualityScore: 0.3,
-  dryRun: false,
-});
-console.log(`Pruned ${pruneResult.removed} items`);
 ```
 
 ## Errors
@@ -215,9 +243,38 @@ console.log(`Pruned ${pruneResult.removed} items`);
 | `KEY_TOO_LONG` | The memory key exceeds 256 characters. | Shorten the key to 256 characters or fewer. |
 | `SCOPE_MISMATCH` | `projectId` or `sessionId` required for the given scope but not provided. | Supply the matching ID for `project` or `session` scopes. |
 | `EXPIRED` | The requested memory item has expired. | Set `includeExpired: true` in `search()` to access expired items, or recreate the item. |
-| `HANDOFF_FAILED` | One or more keys could not be transferred during a handoff. | Check that all specified keys exist in the source session. |
+| `REQUIRED` | A required field for `recordTurn()` is missing. | Supply `sessionId` and `content` as non-empty strings. |
+| `INVALID_ROLE` | The conversation role is not one of the allowed values. | Use one of: `user`, `assistant`, `system`. |
+
+## Architectural Limitations
+
+**In-memory storage only.** The `_store` Map lives in the process. All data is lost when the process restarts. Introducing a durable backend (e.g., Redis, SQLite, or a vector DB) does not require changing the public API, but does require editing all `_store` call sites throughout `src/index.ts` because there is no storage-adapter interface. Concentrating storage access behind a `MemoryStore` interface is the correct upgrade path.
+
+**Semantic search is approximated by term frequency.** `findRelated` and the `semantic` strategy use tokenised keyword overlap rather than embedding-based cosine similarity. Retrieval quality degrades for queries whose intent diverges from the literal key/value text. Integrating an embedding model would be the natural upgrade path.
+
+**Aging requires an external scheduler.** `applyAging()` must be called explicitly. The Workflow Engine is a one-shot DAG executor — it can run a step that calls `applyAging()`, but it cannot trigger that execution on a recurring schedule. Recurrence must come from an external trigger: an OS cron job, a `setInterval` loop in the host process, or a dedicated scheduler service.
+
+**Scoring weights are compile-time constants.** Quality score weights, relevance weights, and `findRelated` weights are hardcoded literals in `_scoreQuality`, `_relevanceScore`, and `findRelated`. They cannot be tuned at runtime without modifying source.
 
 ## Changelog
+
+### [0.2.1] — 2026-06-27
+
+- Fixed `_agingFactor()` to use `createdAt` instead of `updatedAt` — administrative calls to `applyAging()` and `reScore()` were resetting the age clock on every invocation, making subsequent aging passes compute age ≈ 0 and return factor ≈ 1.0.
+- Fixed `applyAging()` and `reScore()` to not mutate `updatedAt` when writing a new quality score — scoring is not a user-visible update.
+- Corrected `store()` docstring: each call produces a new item with a distinct ID; there is no upsert-by-key behaviour.
+- Corrected scheduling limitation: the Workflow Engine is a one-shot executor and cannot schedule recurring calls to `applyAging()`; an external trigger is required.
+- Added compile-time scoring weights as a documented limitation.
+
+### [0.2.0] — 2026-06-27
+
+- Added `findRelated()`: finds related items by tag Jaccard similarity, key-segment overlap, and value token similarity weighted by aging factor.
+- Added `recordTurn()` and `getHistory()`: conversation history storage and retrieval with chronological ordering, role filtering, and token estimation.
+- Added `assembleContext()`: token-budgeted context assembly combining conversation history, project memory, and long-term memory for LLM injection.
+- Added `applyAging()`: applies per-tier exponential decay to stored quality scores (`short-term` half-life 1 h, `session` 30 min, `project` 14 d, `long-term` 90 d).
+- Enhanced hybrid search relevance: incorporates aging factor alongside term frequency and quality score.
+- `_now()` supplemented by `_nowAfter()` to guarantee strictly increasing `updatedAt` timestamps within the same millisecond.
+- 92 tests, 97.39% line coverage, 80.85% branch coverage.
 
 ### [0.1.0] — 2026-06-26
 
@@ -231,5 +288,4 @@ console.log(`Pruned ${pruneResult.removed} items`);
 - Memory summarization via `summarize()`.
 - Scheduled and on-demand pruning via `prune()`.
 - Quality scoring and re-scoring via `reScore()`.
-- Memory indexing with `stats()` and `index()`.
 - TTL-based automatic expiry.
