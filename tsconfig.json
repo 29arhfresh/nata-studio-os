@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "moduleResolution": "node",
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": [
+    "engine/src/**/*",
+    "engine/tests/**/*",
+    "agent/src/**/*",
+    "agent/tests/**/*",
+    "skills/*/src/**/*",
+    "skills/*/tests/**/*"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

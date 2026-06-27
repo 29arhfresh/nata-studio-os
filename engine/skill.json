@@ -1,0 +1,11 @@
+{
+  "name": "workflow-engine",
+  "version": "0.1.0",
+  "description": "DAG-based workflow orchestration engine. Composes Skill APIs into executable pipelines with typed data routing, parallel execution, retry, and structured event emission.",
+  "author": "Nata Studio OS",
+  "tags": ["orchestration", "workflow", "dag", "pipeline", "engine"],
+  "type": "typescript",
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {}
+}
