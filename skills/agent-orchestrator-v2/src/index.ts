@@ -34,8 +34,11 @@
  *
  * The execution phase builds a WorkflowDefinition — the WorkflowEngine's
  * native contract — where each step's handler calls skillInvoker.invoke().
- * The WorkflowEngine then owns: DAG validation, sequential scheduling,
- * timeout enforcement, event emission, and step-output routing.
+ * WorkflowEngine owns: DAG validation, sequential scheduling, timeout
+ * enforcement, and event emission. DataRouter routes (derived from
+ * CAPABILITY_DEPS edges) carry each skill's output to its dependents.
+ * After workflowEngine.run(), invocationResults is derived from
+ * workflowResult.stepResults — no parallel tracking structure.
  *
  * This satisfies the principle "use the Integration Layer as the execution
  * boundary": the orchestrator decides WHAT to run; the WorkflowEngine decides
@@ -57,6 +60,7 @@ import workflowEngine, {
   type WorkflowDefinition,
   type WorkflowResult,
   type StepInput,
+  type DataRoute,
 } from '../../workflow-engine/src/index';
 
 import type { CapabilityRegistry } from '../../../integration/src/capability-registry';
@@ -369,85 +373,96 @@ function buildCapabilityPlan(
  * The orchestrator is a CONSUMER of WorkflowEngine.run(). It builds a
  * WorkflowDefinition whose step handlers call skillInvoker.invoke(). This
  * keeps WorkflowEngine completely unmodified while giving the orchestrator
- * DAG resolution, event streaming, timeout, and retry for free.
+ * DAG validation, sequential scheduling, timeout enforcement, and event
+ * emission for free.
  *
- * STEP OUTPUT ROUTING: Each step writes its InvocationResult to the shared
- * context under key "${skillName}.output". Downstream steps can read upstream
- * results from input.context. We additionally use DataRouter routes to pass
- * the raw output field directly as input.data.previousOutput, mirroring the
- * v1 previousOutputs convention.
+ * DEPENDENCY EDGES: The same CAPABILITY_DEPS map that drives topoSortSkills()
+ * also drives step.dependsOn[] and DataRouter routes. Both are computed in a
+ * single pass over the plan — no second source of routing truth.
+ *
+ * STEP OUTPUT ROUTING: Each DataRouter route carries InvocationResult.output
+ * (outputKey: 'output') from an upstream step to the downstream handler as
+ * stepInput.data.input (inputKey: 'input'). Routes mirror actual CAPABILITY_DEPS
+ * edges, not a sequential chain, so the WorkflowDefinition's DAG accurately
+ * represents the plan's dependency structure.
+ *
+ * RESULT COLLECTION: workflowResult.stepResults is the single source of
+ * execution state. Each handler returns InvocationResult directly; WorkflowEngine
+ * stores it as the step's output. After run() returns, invocationResults is
+ * derived from stepResults — no parallel tracking structure is required.
+ * (SkillInvoker never throws: all errors are returned as InvocationResult.error
+ * fields, so every step always produces a non-null output.)
  */
 async function executePlan(
   plan: CapabilityPlan,
   invoker: SkillInvoker,
   context: OrchestratorContext,
+  intent: string,
 ): Promise<{ workflowResult: WorkflowResult; invocationResults: InvocationResult[] }> {
   const workflowId = `orchestrator-v2-${context.sessionId}`;
-  const invocationResultsMap = new Map<string, InvocationResult>();
 
-  // Map each skill in the sequence to a WorkflowEngine step.
-  const steps = plan.skillSequence.map((reg, index) => {
-    // Determine which prior skills this step depends on (by capability deps).
-    const prereqNames = new Set<string>();
+  // Pre-compute dependency edges in one pass.
+  // Key: skill name → set of prerequisite skill names that appear earlier in
+  // the topological sequence. Used for both step.dependsOn[] and routes[].
+  const prereqNamesForStep = new Map<string, Set<string>>();
+  for (const [index, reg] of plan.skillSequence.entries()) {
+    const prereqs = new Set<string>();
     for (const [cap, assignedReg] of plan.capabilityAssignment) {
       if (assignedReg.name !== reg.name) continue;
       for (const prereqCap of (CAPABILITY_DEPS[cap] ?? [])) {
         const prereqReg = plan.capabilityAssignment.get(prereqCap);
         if (prereqReg && prereqReg.name !== reg.name) {
-          // Only add as dependency if the prereq is earlier in the sequence.
           const prereqIndex = plan.skillSequence.findIndex((s) => s.name === prereqReg.name);
           if (prereqIndex >= 0 && prereqIndex < index) {
-            prereqNames.add(prereqReg.name);
+            prereqs.add(prereqReg.name);
           }
         }
       }
     }
+    prereqNamesForStep.set(reg.name, prereqs);
+  }
 
-    const invocationContext: InvocationContext = {
-      sessionId:       context.sessionId,
-      previousOutputs: context.previousOutputs,
-      sharedMemory:    context.sharedMemory,
-      iterationCount:  context.iterationCount,
-    };
+  // invocationContext is shared across all step handlers. previousOutputs
+  // carries outputs from prior orchestration sessions (not within-session
+  // steps — that data flows via DataRouter routes).
+  const invocationContext: InvocationContext = {
+    sessionId:       context.sessionId,
+    previousOutputs: context.previousOutputs,
+    sharedMemory:    context.sharedMemory,
+    iterationCount:  context.iterationCount,
+  };
 
+  const steps = plan.skillSequence.map((reg) => {
+    const prereqs = prereqNamesForStep.get(reg.name) ?? new Set<string>();
     return {
-      id: reg.name,
-      dependsOn: Array.from(prereqNames),
+      id:        reg.name,
+      dependsOn: Array.from(prereqs),
       timeoutMs: reg.timeoutMs,
-      handler: async (stepInput: StepInput) => {
-        // Enrich the invocation context with outputs produced so far.
-        const enrichedContext: InvocationContext = {
-          ...invocationContext,
-          sharedMemory: {
-            ...invocationContext.sharedMemory,
-            ...stepInput.context,
-          },
-          previousOutputs: Array.from(invocationResultsMap.values()),
-        };
-
-        const result = await invoker.invoke({
+      handler:   async (stepInput: StepInput) =>
+        invoker.invoke({
           skillName: reg.name,
-          input:     stepInput.data.input ?? stepInput.context.intent,
-          context:   enrichedContext,
-        });
-
-        // Store result for downstream steps.
-        invocationResultsMap.set(reg.name, result);
-
-        // Return the full InvocationResult as the step output so the
-        // WorkflowEngine's ContextStore holds the enriched data.
-        return result;
-      },
+          // data.input is set by DataRouter from the upstream step's output.
+          // Falls back to context.intent for root steps (no predecessors).
+          input:   stepInput.data.input ?? stepInput.context.intent,
+          context: invocationContext,
+        }),
     };
   });
 
-  // Route: each step receives the preceding step's output as data.input.
-  const routes = plan.skillSequence.slice(1).map((reg, i) => ({
-    fromStep:  plan.skillSequence[i].name,
-    toStep:    reg.name,
-    outputKey: 'output',
-    inputKey:  'previousOutput',
-  }));
+  // Build routes from CAPABILITY_DEPS edges — not a sequential chain.
+  // outputKey 'output' reads InvocationResult.output (the skill's actual output).
+  // inputKey 'input' delivers it as stepInput.data.input to the downstream handler.
+  const routes: DataRoute[] = [];
+  for (const reg of plan.skillSequence) {
+    for (const prereqName of (prereqNamesForStep.get(reg.name) ?? [])) {
+      routes.push({
+        fromStep:  prereqName,
+        toStep:    reg.name,
+        outputKey: 'output',
+        inputKey:  'input',
+      });
+    }
+  }
 
   const definition: WorkflowDefinition = {
     id: workflowId,
@@ -455,10 +470,11 @@ async function executePlan(
     routes,
   };
 
-  // Seed the workflow context with intent and shared memory so every step
-  // can access them via input.context.
+  // Seed the workflow context with the user's intent and shared memory.
+  // Every step can read intent via stepInput.context.intent as a fallback
+  // when it has no routed predecessor data.
   const workflowContext: Record<string, unknown> = {
-    intent:      context.sessionId,
+    intent,
     ...context.sharedMemory,
   };
 
@@ -466,7 +482,13 @@ async function executePlan(
     context: workflowContext,
   });
 
-  const invocationResults = Array.from(invocationResultsMap.values());
+  // Derive invocation results from WorkflowEngine's step results.
+  // StepResult.output is the value returned by the handler, which is always
+  // InvocationResult (SkillInvoker catches all errors before they can propagate).
+  const invocationResults = workflowResult.stepResults.map(
+    (sr) => sr.output as InvocationResult,
+  );
+
   return { workflowResult, invocationResults };
 }
 
@@ -615,6 +637,7 @@ export class AgentOrchestratorV2 {
       capabilityPlan,
       this.invoker,
       context,
+      request.intent,
     );
 
     const qualityGate = evaluateQualityGate(invocationResults, qualityThreshold);

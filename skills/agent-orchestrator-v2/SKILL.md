@@ -83,11 +83,19 @@ AgentOrchestratorV2.orchestrate()
 
 ### AD-4: WorkflowEngine as Execution Runtime (Req 1)
 
-**Decision:** `executePlan()` builds a `WorkflowDefinition` and calls `workflowEngine.run()`. WorkflowEngine owns DAG validation, sequential scheduling, timeout enforcement, step event emission, and step-output routing (via DataRouter). The orchestrator does not reimplement any of these.
+**Decision:** `executePlan()` builds a `WorkflowDefinition` and calls `workflowEngine.run()`. WorkflowEngine owns DAG validation, sequential scheduling, timeout enforcement, and step event emission. The orchestrator does not reimplement any of these. `workflowResult.stepResults` is the single source of execution state — no parallel tracking structure exists alongside it.
 
 **Evidence from prototype:** `runPlan()` at `skills/agent-orchestrator/src/index.ts:673–709` contained its own step scheduling loop with a custom `completedIndices` set and `MAX_PARALLEL_SKILLS` cap, duplicating responsibility with WorkflowEngine.
 
 **Why:** WorkflowEngine was designed precisely for orchestrated step execution. Using it here removes duplication and gives the orchestrator WorkflowEngine's battle-tested DAG resolver and scheduler for free. WorkflowEngine is not modified (Req 1 satisfied).
+
+**Implementation details:**
+
+- `step.dependsOn[]` and DataRouter `routes[]` are derived from the same `CAPABILITY_DEPS` edge computation in a single pass over `plan.skillSequence`. The `WorkflowDefinition`'s DAG accurately represents the capability dependency structure, not an arbitrary sequential chain.
+- Each DataRouter route uses `outputKey: 'output'` (reads `InvocationResult.output` — the skill's actual output value from the upstream step) and `inputKey: 'input'` (delivers it as `stepInput.data.input` to the downstream handler). Root steps (no predecessors) fall back to `stepInput.context.intent`.
+- The user's intent string is seeded into the workflow context under the key `intent`, making it accessible to every step via `stepInput.context.intent`.
+- Each step handler returns the full `InvocationResult` from `SkillInvoker.invoke()`. WorkflowEngine stores this as the step's output in `stepResults`. SkillInvoker never throws — all errors are returned as `InvocationResult.error` fields — so every step always "completes" from WorkflowEngine's perspective and produces a non-null `StepResult.output`.
+- After `workflowEngine.run()` returns, `invocationResults` is built as `workflowResult.stepResults.map(sr => sr.output as InvocationResult)`. This makes `workflowResult` the authoritative execution record.
 
 ---
 
