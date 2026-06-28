@@ -1,0 +1,13 @@
+{
+  "name": "agent-orchestrator-v2",
+  "version": "2.0.0",
+  "description": "Agent Orchestrator 2.0 — intelligent runtime of Nata Studio OS. Reads capabilities from CapabilityRegistry, routes all execution through SkillInvoker, and delegates DAG-ordered step execution to WorkflowEngine.",
+  "author": "Nata Studio OS",
+  "tags": ["orchestrator", "routing", "coordination", "core", "meta", "v2"],
+  "type": "typescript",
+  "entrypoint": "src/index.ts",
+  "permissions": [],
+  "dependencies": {
+    "workflow-engine": "0.1.0"
+  }
+}

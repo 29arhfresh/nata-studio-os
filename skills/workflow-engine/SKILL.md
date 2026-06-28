@@ -130,3 +130,62 @@ const result = await workflowEngine.run(
 
 - Initial Phase A implementation: EventBus, ContextStore, DataRouter, DagResolver, Scheduler, StepRunner, and public API.
 - 79 tests, 98.1% line coverage, 83.6% branch coverage.
+
+---
+
+## Architectural Decisions
+
+### ADR-1: DataRouter Fan-In Semantics (Phase A)
+
+**Status:** Accepted — limitation acknowledged, resolution deferred to Phase B.
+
+**Context:**
+
+`DataRouter.resolveInputs()` assembles a step's `data` object from all routes whose `toStep` matches the current step. Each route writes one value:
+
+```typescript
+inputs[route.inputKey] = output[route.outputKey];
+```
+
+In a fan-in topology — where two or more upstream steps route output to the **same `inputKey`** of a single downstream step — the last route processed overwrites all previous ones. The downstream step receives only one upstream value; the rest are silently discarded.
+
+**Example:**
+
+```
+brand-strategy  ──┐
+                  ├──▶  image-generation  (inputKey: 'input')
+prompt-architect ─┘
+```
+
+Both routes target `inputKey: 'input'`. Only the output of whichever route is processed last is available to the `image-generation` handler as `stepInput.data.input`. The other upstream output is lost.
+
+**Why this is acceptable for Phase A:**
+
+Phase A executes steps sequentially and targets linear or tree-shaped pipelines. In the default skill set registered by the Integration Layer, each step in a typical plan has at most one direct data predecessor (the primary upstream skill). The fan-in topology only arises when multiple capabilities resolve to different skills that all feed the same downstream skill — a case that is uncommon in Phase A workloads.
+
+Callers can work around the limitation today by using **distinct `inputKey` names** per route (`input.data.fromBrandStrategy`, `input.data.fromPromptArchitect`) and having the downstream handler read each key explicitly. This requires the handler to know which predecessors to expect, which is acceptable when the workflow definition is fully controlled by the caller.
+
+**Why this becomes a limitation for richer DAGs:**
+
+As orchestration expands to richer multi-skill pipelines — parallel branches, conditional splits, and merge nodes — fan-in becomes structurally necessary. Examples:
+
+- A video generation step that needs both a brand brief (from `creative-director`) and an optimised prompt (from `prompt-architect`) as independent inputs.
+- A scoring step that aggregates outputs from three parallel image generation attempts.
+- An error-recovery branch that merges a fallback result with the partial output of a failed primary branch.
+
+In all of these cases, requiring distinct `inputKey` names shifts the routing contract into the handler's implementation, defeating the purpose of a declarative DataRouter.
+
+**Candidate designs for Phase B:**
+
+| Design | Mechanism | Trade-offs |
+|--------|-----------|------------|
+| **Named inputs** | Each route declares a unique `inputKey`. Downstream handler reads `stepInput.data['fromBrandStrategy']`, `stepInput.data['fromPromptArchitect']`, etc. | Handlers must know predecessor names. Tight coupling between route definitions and handler logic. Works today without engine changes. |
+| **Input arrays** | When multiple routes target the same `inputKey`, DataRouter collects values into an array rather than overwriting. Downstream handler receives `stepInput.data.input: unknown[]`. | Simple to implement in DataRouter. Handler must handle both scalar and array cases, or always expect an array. Breaks existing single-predecessor handlers unless array-wrapping is opt-in (e.g., `mergeStrategy: 'array'` on the route). |
+| **Merge strategies** | Each route (or the `toStep` definition) declares a `mergeStrategy`: `'last-wins'` (current), `'array'`, `'object-spread'`, or `'first-wins'`. DataRouter executes the declared strategy. | Expressive. `'object-spread'` covers the case where upstream steps produce disjoint key sets that should be merged into one object. Requires a new optional field on `DataRoute` and strategy dispatch in `resolveInputs()`. |
+| **Reducer functions** | `DataRoute` accepts an optional `reducer: (accumulated: unknown, next: unknown) => unknown`. DataRouter folds each matching route's value through the reducer, starting from `undefined`. | Maximum flexibility. Keeps DataRouter logic simple (one loop, one function call per route). Reducers are caller-defined, so no engine changes needed for new merge semantics. The reducer must be a pure function; serialisation across process boundaries (e.g., distributed execution) would require a registered reducer registry rather than inline functions. |
+
+**Recommendation for Phase B:** Implement merge strategies as an optional `mergeStrategy` field on `DataRoute` with values `'last-wins'` (default, preserving current behaviour), `'array'`, and `'object-spread'`. This is additive, non-breaking, and covers the majority of real fan-in cases without introducing the serialisation complexity of reducer functions. Reducer functions can be added as a separate extension point if needed.
+
+**Effect on Agent Orchestrator:**
+
+This is a DataRouter constraint, not an orchestrator defect. Agent Orchestrator v2 derives routes from `CAPABILITY_DEPS` edges and uses `inputKey: 'input'` for all routes. In fan-in cases, the last-processed predecessor's output reaches the downstream handler. The orchestrator's route-building logic is correct; the handler receives less data than it ideally would. When Phase B merge strategies land, the orchestrator can opt in by setting `mergeStrategy: 'array'` or `'object-spread'` on routes without any structural change to its planning or execution logic.
